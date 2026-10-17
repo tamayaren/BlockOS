@@ -1,23 +1,21 @@
--- Login / lock screen with an animated ASCII plasma background.
--- Used standalone at boot and embedded by the desktop for locking.
+-- Login / lock screen drawn straight over a slow ASCII plasma, without a panel.
+-- Used by the desktop for logging in and locking.
 
 local Gfx = BlockOS.Require("gfx")
 local Users = BlockOS.Require("users")
 local Config = BlockOS.Require("config")
 local Logo = BlockOS.Require("logo")
+local Screensaver = BlockOS.Require("screensaver")
 
 local Login = {}
 Login.__index = Login
-
-local Density = { " ", ".", ":", "-", "=", "+", "*", "#", "%", "@" }
-local Shades = {
-	colors.black, colors.gray, colors.blue, colors.purple, colors.magenta, colors.cyan, colors.lightBlue, colors.white
-}
 
 local Hex = {}
 for Index = 0, 15 do
 	Hex[2 ^ Index] = string.format("%x", Index)
 end
+
+local PowerItems = { { Text = "Restart", Action = "restart" }, { Text = "Shut Down", Action = "shutdown" } }
 
 function Login.new(T, Opts)
 	local Self = setmetatable({}, Login)
@@ -26,9 +24,10 @@ function Login.new(T, Opts)
 	Self.User = Users.Primary()
 	Self.Password = ""
 	Self.Message = nil
-	Self.Frame = 0
+	Self.Frame = math.random(0, 2000)
 	Self.Shake = 0
 	Self.Buttons = {}
+	Self.PowerOpen = false
 	return Self
 end
 
@@ -37,94 +36,132 @@ function Login:Start()
 	self:Draw()
 end
 
-function Login:DrawBackground()
-	local T = self.T
-	local W, H = T.getSize()
-	local Time = self.Frame / 6
-	local Columns, Rows, Diagonal = {}, {}, {}
-	for X = 1, W do
-		Columns[X] = math.sin(X / 5 + Time)
-	end
-	for Y = 1, H do
-		Rows[Y] = math.sin(Y / 2.5 - Time * .7)
-	end
-	for Index = 1, W + H do
-		Diagonal[Index] = math.sin(Index / 7 + Time * 1.3)
-	end
-	for Y = 1, H do
-		local Chars, Fg, Bg = {}, {}, {}
-		for X = 1, W do
-			local Value = (Columns[X] + Rows[Y] + Diagonal[X + Y] + 3) / 6
-			local CharIndex = math.max(1, math.min(#Density, math.floor(Value * #Density) + 1))
-			local ShadeIndex = math.max(1, math.min(#Shades, math.floor(Value * #Shades) + 1))
-			Chars[X] = Density[CharIndex]
-			Fg[X] = Hex[Shades[ShadeIndex]]
-			Bg[X] = (Value > .78) and Hex[colors.blue] or Hex[colors.black]
+-- Writes text onto the canvas, keeping the plasma's background colour unless Bg is given.
+local function Put(Canvas, X, Y, Text, Fg, Bg)
+	if (Y < 1 or Y > Canvas.H) then return end
+	for Index = 1, #Text do
+		local Column = X + Index - 1
+		if (Column >= 1 and Column <= Canvas.W) then
+			Canvas.Chars[Y][Column] = Text:sub(Index, Index)
+			Canvas.Fg[Y][Column] = Hex[Fg]
+			if (Bg) then Canvas.Bg[Y][Column] = Hex[Bg] end
 		end
-		T.setCursorPos(1, Y)
-		T.blit(table.concat(Chars), table.concat(Fg), table.concat(Bg))
 	end
+end
+
+-- Clears the plasma characters behind a block of text so it stays readable.
+local function Clear(Canvas, X, Y, W)
+	Put(Canvas, X, Y, string.rep(" ", W), colors.white)
+end
+
+local function PutCentered(Canvas, Y, Text, Fg, Bg)
+	local X = math.floor((Canvas.W - #Text) / 2) + 1
+	Clear(Canvas, X - 1, Y, #Text + 2)
+	Put(Canvas, X, Y, Text, Fg, Bg)
+	return X
+end
+
+local function PutLogo(Canvas, X, Y, Art)
+	for Row, Line in ipairs(Art) do
+		for Column = 1, #Line do
+			local Entry = Logo.Legend[Line:sub(Column, Column)]
+			if (Entry) then
+				Put(Canvas, X + Column - 1, Y + Row - 1, Entry[1], Entry[2], Entry[3])
+			end
+		end
+	end
+end
+
+local function ClockText()
+	local Settings = Config.Settings()
+	if (Settings.Clock24) then
+		return os.date("%H:%M"), nil
+	end
+	return (os.date("%I:%M"):gsub("^0", "")), os.date("%p")
 end
 
 function Login:Draw()
 	local T = self.T
 	local W, H = T.getSize()
-	if (T.setVisible) then T.setVisible(false) end
-	self:DrawBackground()
-	local Settings = Config.Settings()
-	local Clock = os.date(Settings.Clock24 and "%H:%M" or "%I:%M %p")
-	Gfx.Center(T, 2, Clock, colors.white, colors.black)
-	Gfx.Center(T, 3, os.date("%A, %B %d"), colors.lightGray, colors.black)
+	if (not self.Canvas or self.Canvas.W ~= W or self.Canvas.H ~= H) then
+		self.Canvas = Screensaver.NewCanvas(W, H)
+	end
+	local Canvas = self.Canvas
+	Screensaver.Render(Canvas, self.Frame * Screensaver.Speed)
 
-	local PanelW, PanelH = math.min(28, W - 2), 10
+	local Time, Suffix = ClockText()
+	local Y = 2
+	PutCentered(Canvas, Y, os.date("%A, %B %d"), colors.white)
+	if (H >= 17 and W >= 24) then
+		local BigW = Gfx.BigWidth(Time)
+		local BigX = math.floor((W - BigW) / 2) + 1
+		Gfx.EachBigCell(BigX, Y + 2, Time, function(X, CellY)
+			Put(Canvas, X, CellY, " ", colors.white, colors.white)
+		end)
+		if (Suffix) then
+			Put(Canvas, BigX + BigW + 1, Y + 6, Suffix, colors.white)
+		end
+		Y = Y + 8
+	else
+		PutCentered(Canvas, Y + 1, Time .. (Suffix and (" " .. Suffix) or ""), colors.white)
+		Y = Y + 3
+	end
+
 	local Offset = 0
 	if (self.Shake > 0) then
 		Offset = (self.Shake % 2 == 0) and 1 or -1
 	end
-	local PanelX = math.floor((W - PanelW) / 2) + 1 + Offset
-	local PanelY = math.max(5, math.floor((H - PanelH) / 2) + 1)
-	Gfx.Fill(T, PanelX, PanelY, PanelW, PanelH, colors.gray)
-	local LogoW = Logo.Size(Logo.Small)
-	Logo.Draw(T, PanelX + math.floor((PanelW - LogoW) / 2) + 1, PanelY + 1, Logo.Small)
+	local LogoW, LogoH = Logo.Size(Logo.Small)
+	local BottomSpace = 5
+	local LogoY = math.max(Y, H - BottomSpace - LogoH - 1)
+	if (LogoY + LogoH + 4 <= H) then
+		PutLogo(Canvas, math.floor((W - LogoW) / 2) + 1, LogoY, Logo.Small)
+		Y = LogoY + LogoH
+	end
 
 	local Name = self.User and self.User.Name or "Guest"
-	Gfx.Center(T, PanelY + 6, Name, colors.white, colors.gray, PanelX, PanelW)
+	PutCentered(Canvas, Y, Name, colors.white)
+	Y = Y + 2
 
-	local FieldX, FieldY, FieldW = PanelX + 2, PanelY + 8, PanelW - 7
-	local NeedsPassword = self.User and self.User.HasPassword
 	self.Buttons = {}
+	local NeedsPassword = self.User and self.User.HasPassword
+	local FieldW = math.min(20, W - 6)
+	local FieldX = math.floor((W - FieldW - 3) / 2) + 1 + Offset
 	if (NeedsPassword) then
 		local Masked = string.rep("\7", #self.Password)
-		if (#Masked > FieldW - 1) then Masked = Masked:sub(-(FieldW - 1)) end
-		if (#self.Password == 0) then
-			Gfx.Write(T, FieldX, FieldY, Gfx.Pad(" Password", FieldW), colors.lightGray, colors.lightGray)
-			Gfx.Write(T, FieldX, FieldY, " Password", colors.gray, colors.lightGray)
-		else
-			Gfx.Write(T, FieldX, FieldY, Gfx.Pad(" " .. Masked, FieldW), colors.black, colors.lightGray)
-		end
+		if (#Masked > FieldW - 2) then Masked = Masked:sub(-(FieldW - 2)) end
+		local Text = (#self.Password == 0) and " Enter Password" or (" " .. Masked)
+		Put(Canvas, FieldX, Y, Gfx.Pad(Text, FieldW), (#self.Password == 0) and colors.lightGray or colors.white, colors.gray)
 	else
-		Gfx.Write(T, FieldX, FieldY, Gfx.Pad("Click to log in", FieldW, "center"), colors.white, colors.gray)
+		Put(Canvas, FieldX, Y, Gfx.Pad("Click to log in", FieldW, "center"), colors.white, colors.gray)
 	end
-	local GoX = FieldX + FieldW + 1
-	Gfx.Write(T, GoX, FieldY, " \26 ", colors.white, colors.blue)
-	table.insert(self.Buttons, { X = FieldX, Y = FieldY, W = FieldW + 4, Action = "submit" })
+	Put(Canvas, FieldX + FieldW, Y, " \26 ", colors.white, colors.gray)
+	table.insert(self.Buttons, { X = FieldX, Y = Y, W = FieldW + 3, Action = "submit" })
+	self.FieldX, self.FieldY, self.FieldW = FieldX, Y, FieldW
 
 	if (self.Message) then
-		Gfx.Center(T, PanelY + PanelH, " " .. self.Message .. " ", colors.white, colors.red)
+		PutCentered(Canvas, Y + 1, self.Message, colors.red)
 	end
 
-	local Restart, Shutdown = " Restart ", " Shut Down "
-	local TotalW = #Restart + #Shutdown + 2
-	local ButtonX = math.floor((W - TotalW) / 2) + 1
-	Gfx.Write(T, ButtonX, H - 1, Restart, colors.white, colors.gray)
-	table.insert(self.Buttons, { X = ButtonX, Y = H - 1, W = #Restart, Action = "restart" })
-	Gfx.Write(T, ButtonX + #Restart + 2, H - 1, Shutdown, colors.white, colors.gray)
-	table.insert(self.Buttons, { X = ButtonX + #Restart + 2, Y = H - 1, W = #Shutdown, Action = "shutdown" })
+	-- Power button: a small circle in the bottom-right corner that opens a menu.
+	local PowerX, PowerY = W - 2, H - 1
+	Clear(Canvas, PowerX - 1, PowerY, 3)
+	Put(Canvas, PowerX, PowerY, "\7", self.PowerOpen and colors.lightGray or colors.white)
+	table.insert(self.Buttons, { X = PowerX - 1, Y = PowerY, W = 3, Action = "power" })
+	if (self.PowerOpen) then
+		local MenuW = 11
+		local MenuX = W - MenuW
+		local MenuY = PowerY - #PowerItems - 1
+		for Index, Item in ipairs(PowerItems) do
+			Put(Canvas, MenuX, MenuY + Index - 1, Gfx.Pad(" " .. Item.Text, MenuW), colors.black, colors.white)
+			table.insert(self.Buttons, { X = MenuX, Y = MenuY + Index - 1, W = MenuW, Action = Item.Action })
+		end
+	end
 
-	if (T.setVisible) then T.setVisible(true) end
-	if (NeedsPassword) then
-		T.setCursorPos(FieldX + math.min(#self.Password, FieldW - 1) + 1, FieldY)
-		T.setTextColor(colors.black)
+	Screensaver.Blit(T, Canvas)
+	if (NeedsPassword and not self.PowerOpen) then
+		T.setCursorPos(FieldX + math.min(#self.Password, FieldW - 2) + 1, Y)
+		T.setTextColor(colors.white)
 		T.setCursorBlink(true)
 	else
 		T.setCursorBlink(false)
@@ -141,6 +178,17 @@ function Login:Submit()
 	self.Message = "Incorrect password"
 	self.Shake = 6
 	return false
+end
+
+function Login:Power(Action)
+	self.PowerOpen = false
+	if (self.Opts.OnPower) then
+		self.Opts.OnPower(Action)
+	elseif (Action == "restart") then
+		os.reboot()
+	else
+		os.shutdown()
+	end
 end
 
 -- Feeds one event. Returns true once the user is authenticated.
@@ -165,16 +213,21 @@ function Login:Event(Name, A, B, C)
 			if (self:Submit()) then return true end
 		end
 	elseif (Name == "mouse_click") then
+		local Hit = nil
 		for _, Button in ipairs(self.Buttons) do
 			if (B >= Button.X and B < Button.X + Button.W and C == Button.Y) then
-				if (Button.Action == "submit") then
-					if (self:Submit()) then return true end
-				elseif (Button.Action == "restart") then
-					os.reboot()
-				elseif (Button.Action == "shutdown") then
-					os.shutdown()
-				end
+				Hit = Button
 			end
+		end
+		if (not Hit) then
+			self.PowerOpen = false
+		elseif (Hit.Action == "power") then
+			self.PowerOpen = not self.PowerOpen
+		elseif (Hit.Action == "submit") then
+			self.PowerOpen = false
+			if (self:Submit()) then return true end
+		else
+			self:Power(Hit.Action)
 		end
 	else
 		return false

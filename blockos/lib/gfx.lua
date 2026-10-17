@@ -105,4 +105,60 @@ function Gfx.FormatSize(Bytes)
 	return string.format("%d B", Bytes)
 end
 
+-- 3x5 digits for large clocks.
+Gfx.Font = {
+	["0"] = { "###", "# #", "# #", "# #", "###" },
+	["1"] = { " # ", "## ", " # ", " # ", "###" },
+	["2"] = { "###", "  #", "###", "#  ", "###" },
+	["3"] = { "###", "  #", " ##", "  #", "###" },
+	["4"] = { "# #", "# #", "###", "  #", "  #" },
+	["5"] = { "###", "#  ", "###", "  #", "###" },
+	["6"] = { "###", "#  ", "###", "# #", "###" },
+	["7"] = { "###", "  #", "  #", " # ", " # " },
+	["8"] = { "###", "# #", "###", "# #", "###" },
+	["9"] = { "###", "# #", "###", "  #", "###" },
+	[":"] = { " ", "#", " ", "#", " " },
+	["."] = { " ", " ", " ", " ", "#" }
+}
+
+function Gfx.BigWidth(Text)
+	local Width = 0
+	for Index = 1, #Text do
+		local Glyph = Gfx.Font[Text:sub(Index, Index)]
+		Width = Width + (Glyph and #Glyph[1] or 1) + 1
+	end
+	return Width - 1
+end
+
+-- Calls Plot(X, Y) for every filled cell of Text drawn in the large font.
+function Gfx.EachBigCell(X, Y, Text, Plot)
+	for Index = 1, #Text do
+		local Glyph = Gfx.Font[Text:sub(Index, Index)]
+		if (Glyph) then
+			for Row = 1, 5 do
+				local Line = Glyph[Row]
+				for Column = 1, #Line do
+					if (Line:sub(Column, Column) == "#") then
+						Plot(X + Column - 1, Y + Row - 1)
+					end
+				end
+			end
+			X = X + #Glyph[1] + 1
+		else
+			X = X + 2
+		end
+	end
+end
+
+-- Scales the whole palette towards black; Level 1 restores the normal colours.
+function Gfx.SetFade(T, Level)
+	if (not T.setPaletteColor or not term.nativePaletteColor) then return false end
+	for Index = 0, 15 do
+		local Color = 2 ^ Index
+		local R, G, B = term.nativePaletteColor(Color)
+		T.setPaletteColor(Color, R * Level, G * Level, B * Level)
+	end
+	return true
+end
+
 return Gfx

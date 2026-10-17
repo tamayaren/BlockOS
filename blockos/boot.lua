@@ -24,6 +24,11 @@ end
 
 local function Panic(Err)
 	term.redirect(term.native())
+	if (term.nativePaletteColor) then
+		for Index = 0, 15 do
+			term.setPaletteColor(2 ^ Index, term.nativePaletteColor(2 ^ Index))
+		end
+	end
 	term.setBackgroundColor(colors.blue)
 	term.setTextColor(colors.white)
 	term.clear()
@@ -60,14 +65,51 @@ if (not term.isColor()) then
 	return
 end
 
+-- Carries settings and files over from older releases.
+local function Migrate(Config)
+	if (fs.exists("/blockos/apps/btunes") and fs.exists("/blockos/apps/musicstream")) then
+		fs.delete("/blockos/apps/musicstream")
+	end
+	local Settings = Config.Settings()
+	local Changed = false
+	for _, List in ipairs({ Settings.Dock or {}, Settings.StartupApps or {} }) do
+		for Index, ID in ipairs(List) do
+			if (ID == "musicstream") then
+				List[Index] = "btunes"
+				Changed = true
+			end
+		end
+	end
+	if (Changed) then
+		local HasNotes = false
+		for _, ID in ipairs(Settings.Dock or {}) do
+			if (ID == "notes") then HasNotes = true end
+		end
+		for Index, ID in ipairs(Settings.Dock or {}) do
+			if (ID == "btunes" and not HasNotes) then
+				table.insert(Settings.Dock, Index, "notes")
+				break
+			end
+		end
+		Config.Save("settings")
+	end
+end
+
 local Ok, Err = pcall(function()
 	local Config = BlockOS.Require("config")
 	BlockOS.Version = Config.Version()
+	Migrate(Config)
 	math.randomseed(os.epoch("utc") + os.getComputerID())
 
 	local Users = BlockOS.Require("users")
-	if (not Users.HasAny()) then
+	local Gfx = BlockOS.Require("gfx")
+	if (Users.HasAny()) then
+		BlockOS.Load("/blockos/sys/splash.lua").Run(term.current())
+	else
 		BlockOS.Load("/blockos/sys/setup.lua").Run({ Mode = "firstboot" })
+	end
+	if (not Config.Settings().Animations) then
+		Gfx.SetFade(term.current(), 1)
 	end
 
 	if (not Shell.path():find("/blockos/bin", 1, true)) then

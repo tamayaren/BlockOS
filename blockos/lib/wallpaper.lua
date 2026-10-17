@@ -7,9 +7,16 @@ Wallpaper.List = {
 	{ ID = "night", Name = "Starry Night" },
 	{ ID = "nether", Name = "Nether" },
 	{ ID = "ocean", Name = "Ocean" },
+	{ ID = "dusk", Name = "Dusk" },
+	{ ID = "deepslate", Name = "Deepslate" },
+	{ ID = "cave", Name = "Cave" },
+	{ ID = "theend", Name = "The End" },
 	{ ID = "grid", Name = "Grid" },
 	{ ID = "solid", Name = "Solid Colour" }
 }
+
+-- Wallpapers that use the chosen colour.
+Wallpaper.Coloured = { grid = true, solid = true }
 
 local Hex = {}
 for Index = 0, 15 do
@@ -150,9 +157,122 @@ function Renderers.ocean(W, H)
 	return Finish(Canvas)
 end
 
+function Renderers.dusk(W, H)
+	local Canvas = NewCanvas(W, H, colors.black)
+	local Rand = Random(21)
+	local Bands = { colors.black, colors.black, colors.blue, colors.purple, colors.magenta }
+	for Y = 1, H do
+		local Band = Bands[math.min(#Bands, math.floor(Y / H * #Bands * .9) + 1)]
+		for X = 1, W do
+			Set(Canvas, X, Y, " ", nil, Band)
+		end
+	end
+	for _ = 1, math.floor(W * H / 40) do
+		Set(Canvas, Rand(W) + 1, Rand(math.max(1, math.floor(H * .35))) + 1, (Rand(3) == 0) and "+" or ".", colors.lightGray)
+	end
+	for X = W - 9, W - 7 do
+		Set(Canvas, X, 3, " ", nil, colors.white)
+	end
+	Set(Canvas, W - 8, 4, " ", nil, colors.lightGray)
+	local Phase = Rand(100) / 10
+	for X = 1, W do
+		local Height = math.floor(H * .78 + math.sin(X / 6 + Phase) * 2 + math.sin(X / 2.3) * .6 + .5)
+		for Y = Height, H do
+			Set(Canvas, X, Y, (Y == Height and Rand(3) == 0) and "\"" or " ", colors.gray, colors.black)
+		end
+	end
+	return Finish(Canvas)
+end
+
+function Renderers.deepslate(W, H)
+	local Canvas = NewCanvas(W, H, colors.gray)
+	local Rand = Random(64)
+	for Y = 1, H do
+		for X = 1, W do
+			local Offset = (math.floor((Y - 1) / 2) % 2) * 4
+			if ((X + Offset) % 8 == 0 or Y % 2 == 0 and Rand(3) == 0) then
+				Set(Canvas, X, Y, (Rand(2) == 0) and "_" or " ", colors.black, colors.gray)
+			end
+			if (Rand(9) == 0) then
+				Set(Canvas, X, Y, ({ ".", ":", "'" })[Rand(3) + 1], colors.black)
+			end
+		end
+	end
+	for _ = 1, math.max(2, math.floor(W * H / 180)) do
+		local OreX, OreY = Rand(W - 2) + 1, Rand(H - 1) + 1
+		local Ore = ({ colors.cyan, colors.red, colors.lightBlue, colors.lime })[Rand(4) + 1]
+		Set(Canvas, OreX, OreY, "\7", Ore)
+		Set(Canvas, OreX + 1, OreY, ".", Ore)
+	end
+	return Finish(Canvas)
+end
+
+function Renderers.cave(W, H)
+	local Canvas = NewCanvas(W, H, colors.black)
+	local Rand = Random(31)
+	for X = 1, W do
+		local Ceiling = math.floor(2 + math.sin(X / 4) * 1.5 + math.sin(X / 1.7) * .7 + .5)
+		local Floor = math.floor(H * .72 + math.sin(X / 5 + 1) * 1.6 + .5)
+		for Y = 1, H do
+			if (Y <= Ceiling or Y >= Floor) then
+				Set(Canvas, X, Y, (Rand(5) == 0) and ":" or " ", colors.lightGray, colors.gray)
+			end
+		end
+		if (Rand(9) == 0) then
+			Set(Canvas, X, Ceiling + 1, "'", colors.gray)
+		end
+	end
+	local PoolX = math.floor(W * .55)
+	for X = PoolX, math.min(W, PoolX + math.floor(W / 5)) do
+		Set(Canvas, X, H - 1, (Rand(3) == 0) and "~" or " ", colors.yellow, colors.orange)
+		Set(Canvas, X, H, " ", nil, colors.red)
+	end
+	for _ = 1, math.max(3, math.floor(W / 8)) do
+		Set(Canvas, Rand(W) + 1, H - Rand(3), "\7", ({ colors.cyan, colors.red, colors.yellow })[Rand(3) + 1])
+	end
+	Set(Canvas, 4, math.floor(H * .6), "i", colors.yellow)
+	return Finish(Canvas)
+end
+
+function Renderers.theend(W, H)
+	local Canvas = NewCanvas(W, H, colors.black)
+	local Rand = Random(77)
+	for _ = 1, math.floor(W * H / 25) do
+		Set(Canvas, Rand(W) + 1, Rand(H) + 1, ".", (Rand(3) == 0) and colors.purple or colors.gray)
+	end
+	local Center = math.floor(W / 2)
+	local Top = math.floor(H * .7)
+	for Y = Top, H do
+		local Half = math.floor((W * .45) * (1 - (Y - Top) / (H - Top + 2)))
+		for X = Center - Half, Center + Half do
+			Set(Canvas, X, Y, (Rand(4) == 0) and "." or " ", colors.brown, (Y == Top) and colors.yellow or colors.white)
+		end
+	end
+	for _ = 1, 3 do
+		local PlantX = Center + Rand(math.floor(W * .6)) - math.floor(W * .3)
+		local Height = Rand(4) + 3
+		for Y = Top - Height, Top - 1 do
+			Set(Canvas, PlantX, Y, " ", nil, colors.purple)
+		end
+		Set(Canvas, PlantX, Top - Height - 1, " ", nil, colors.magenta)
+	end
+	for _, Pillar in ipairs({ math.floor(W * .2), math.floor(W * .8) }) do
+		for Y = Top - 5, Top - 1 do
+			Set(Canvas, Pillar, Y, " ", nil, colors.gray)
+		end
+		Set(Canvas, Pillar, Top - 6, "\7", colors.pink, colors.black)
+	end
+	return Finish(Canvas)
+end
+
 function Renderers.grid(W, H, Color)
 	local Canvas = NewCanvas(W, H, Color)
-	local Dot = (Color == colors.white or Color == colors.lightGray) and colors.gray or colors.lightGray
+	local Dot = colors.lightGray
+	if (Color == colors.white or Color == colors.lightGray) then
+		Dot = colors.gray
+	elseif (Color == colors.black) then
+		Dot = colors.gray
+	end
 	for Y = 1, H, 2 do
 		for X = 1, W, 4 do
 			Set(Canvas, X, Y, "+", Dot)

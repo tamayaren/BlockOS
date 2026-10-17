@@ -8,6 +8,7 @@ local Apps = BlockOS.Require("apps")
 local Users = BlockOS.Require("users")
 local Wallpaper = BlockOS.Require("wallpaper")
 local Updater = BlockOS.Require("updater")
+local Screensaver = BlockOS.Require("screensaver")
 
 local Args = { ... }
 
@@ -19,6 +20,7 @@ local Sections = {
 	{ ID = "general", Name = "General", Icon = "\15" },
 	{ ID = "appearance", Name = "Appearance", Icon = "\4" },
 	{ ID = "dock", Name = "Dock", Icon = "\22" },
+	{ ID = "lockscreen", Name = "Lock Screen", Icon = "\8" },
 	{ ID = "users", Name = "Users & Login", Icon = "\2" },
 	{ ID = "notifications", Name = "Notifications", Icon = "\7" },
 	{ ID = "network", Name = "Network", Icon = "\29" },
@@ -33,6 +35,12 @@ end
 
 local UpdateProgress = nil
 local UpdateMessage = nil
+local PreviewFrame = 0
+local WallpaperColours = {
+	colors.white, colors.lightGray, colors.gray, colors.black, colors.blue,
+	colors.cyan, colors.green, colors.purple, colors.red, colors.orange
+}
+local DarkText = { [colors.white] = true, [colors.lightGray] = true, [colors.yellow] = true, [colors.cyan] = true }
 
 local function Save()
 	Config.Save("settings")
@@ -49,7 +57,7 @@ local function Swatches(X, Y, Choices, Get, Set)
 		OnDraw = function(Self, T)
 			for Index, Color in ipairs(Choices) do
 				local Mark = (Color == Get()) and "\7" or " "
-				Gfx.Write(T, Self.X + (Index - 1) * 2, Self.Y, Mark .. " ", (Color == colors.white) and colors.black or colors.white, Color)
+				Gfx.Write(T, Self.X + (Index - 1) * 2, Self.Y, Mark .. " ", DarkText[Color] and colors.black or colors.white, Color)
 			end
 		end,
 		OnEvent = function(Self, Name, _, MouseX)
@@ -72,6 +80,22 @@ local function ToggleRow(Y, Label, Key, After)
 		end
 	}))
 	Page:Add(Ui.Label.new({ X = X + 5, Y = Y, W = Page.ContentW - 5, Text = Label }))
+end
+
+local function ChoiceRow(Y, Label, Key, Items, Values, Default)
+	local X = Page.ContentX
+	local Selected = 1
+	for Index, Value in ipairs(Values) do
+		if (Value == (Settings[Key] or Default)) then Selected = Index end
+	end
+	Page:Add(Ui.Label.new({ X = X, Y = Y, Text = Label }))
+	Page:Add(Ui.Tabs.new({
+		X = X + 11, Y = Y, W = math.min(20, Page.ContentW - 11), Items = Items, Selected = Selected,
+		OnChange = function(_, Index)
+			Settings[Key] = Values[Index]
+			Save()
+		end
+	}))
 end
 
 local Builders = {}
@@ -125,8 +149,9 @@ function Builders.appearance(X, Y, W, H)
 		if (Entry.ID == Settings.Wallpaper) then Selected = Index end
 	end
 	local ListW = math.min(14, W - 2)
-	local List = Page:Add(Ui.List.new({ X = X, Y = Y + 5, W = ListW, H = math.min(#Items, H - 7), Items = Items, Bg = "Panel" }))
-	List.Selected = Selected
+	local ListH = math.max(2, math.min(#Items, H - 6))
+	local List = Page:Add(Ui.List.new({ X = X, Y = Y + 5, W = ListW, H = ListH, Items = Items, Bg = "Panel" }))
+	List:Select(Selected)
 	List.OnSelect = function(_, _, Item)
 		Settings.Wallpaper = Item.ID
 		Save()
@@ -134,23 +159,31 @@ function Builders.appearance(X, Y, W, H)
 	local PreviewW = W - ListW - 1
 	if (PreviewW >= 8) then
 		Page:Add(Ui.Canvas.new({
-			X = X + ListW + 1, Y = Y + 5, W = PreviewW, H = math.min(6, H - 8),
+			X = X + ListW + 1, Y = Y + 5, W = PreviewW, H = ListH,
 			OnDraw = function(Self, T)
 				Wallpaper.Draw(T, Self.X, Self.Y, Self.W, Self.H, Settings.Wallpaper, Settings.WallpaperColor)
 			end
 		}))
-		Page:Add(Ui.Label.new({ X = X + ListW + 1, Y = Y + 5 + math.min(6, H - 8), Text = "Colour", Fg = "SubText" }))
-		Swatches(X + ListW + 8, Y + 5 + math.min(6, H - 8), { colors.cyan, colors.blue, colors.purple, colors.pink, colors.green, colors.orange, colors.gray, colors.black }, function()
+	end
+	local ColourY = Y + 5 + ListH
+	if (ColourY < Y + H) then
+		local Coloured = Wallpaper.Coloured and Wallpaper.Coloured[Settings.Wallpaper]
+		Page:Add(Ui.Label.new({ X = X, Y = ColourY, Text = "Colour", Fg = Coloured and "Text" or "SubText" }))
+		Swatches(X + 7, ColourY, WallpaperColours, function()
 			return Settings.WallpaperColor
 		end, function(Color)
 			Settings.WallpaperColor = Color
+			if (not Coloured) then Settings.Wallpaper = "solid" end
 			Save()
 		end)
 	end
 end
 
 function Builders.dock(X, Y, W, H)
-	local List = Page:Add(Ui.List.new({ X = X, Y = Y, W = W, H = H - 4, Bg = "Panel" }))
+	ChoiceRow(Y, "Size", "DockSize", { "Small", "Large" }, { "small", "large" }, "small")
+	ChoiceRow(Y + 1, "Style", "DockStyle", { "Solid", "Clear" }, { "solid", "transparent" }, "solid")
+	ToggleRow(Y + 3, "Animations", "Animations")
+	local List = Page:Add(Ui.List.new({ X = X, Y = Y + 5, W = W, H = math.max(1, H - 8), Bg = "Panel" }))
 	local function Fill()
 		local Items = {}
 		for Index, ID in ipairs(Settings.Dock) do
@@ -172,7 +205,7 @@ function Builders.dock(X, Y, W, H)
 		Fill()
 		List:Select(List.Selected + Step)
 	end
-	local ButtonY = Y + H - 3
+	local ButtonY = Y + H - 2
 	Page:Add(Ui.Button.new({ X = X, Y = ButtonY, W = 3, Text = "\24", OnClick = function() MoveSelected(-1) end }))
 	Page:Add(Ui.Button.new({ X = X + 4, Y = ButtonY, W = 3, Text = "\25", OnClick = function() MoveSelected(1) end }))
 	Page:Add(Ui.Button.new({ X = X + 8, Y = ButtonY, Text = " Remove ", OnClick = function()
@@ -199,6 +232,36 @@ function Builders.dock(X, Y, W, H)
 			Fill()
 		end
 	end }))
+end
+
+function Builders.lockscreen(X, Y, W, H)
+	Page:Add(Ui.Label.new({ X = X, Y = Y, W = W, Text = "Screensaver colours", Fg = "SubText" }))
+	local Items = {}
+	local Selected = 1
+	for Index, Entry in ipairs(Screensaver.Palettes) do
+		table.insert(Items, { Text = Entry.Name, ID = Entry.ID })
+		if (Entry.ID == (Settings.LockColors or "accent")) then Selected = Index end
+	end
+	local ListW = math.min(15, W - 2)
+	local ListH = math.max(2, math.min(#Items, H - 4))
+	local List = Page:Add(Ui.List.new({ X = X, Y = Y + 1, W = ListW, H = ListH, Items = Items, Bg = "Panel" }))
+	List:Select(Selected)
+	List.OnSelect = function(_, _, Item)
+		Settings.LockColors = Item.ID
+		Save()
+	end
+	local PreviewW = W - ListW - 1
+	if (PreviewW >= 6) then
+		local Canvas = Screensaver.NewCanvas(PreviewW, ListH)
+		Page:Add(Ui.Canvas.new({
+			X = X + ListW + 1, Y = Y + 1, W = PreviewW, H = ListH,
+			OnDraw = function(Self, T)
+				Screensaver.Render(Canvas, PreviewFrame * Screensaver.Speed * 4, Settings.LockColors)
+				Screensaver.Blit(T, Canvas, Self.X, Self.Y)
+			end
+		}))
+	end
+	Page:Add(Ui.Button.new({ X = X, Y = Y + ListH + 2, Text = " Lock Now ", Style = "primary", OnClick = function() BlockOS.Lock() end }))
 end
 
 function Builders.users(X, Y, W)
@@ -385,7 +448,7 @@ function Builders.update(X, Y, W, H)
 			Build()
 		end }))
 	elseif (State.Status == "ready") then
-		Page:Add(Ui.Button.new({ X = X + 13, Y = ButtonY, Text = " Restart ", Style = "primary", OnClick = function() os.reboot() end }))
+		Page:Add(Ui.Button.new({ X = X + 13, Y = ButtonY, Text = " Restart ", Style = "primary", OnClick = function() BlockOS.Restart() end }))
 	end
 	if (UpdateProgress) then
 		Page:Add(Ui.Progress.new({ X = X, Y = ButtonY + 2, W = W, Value = UpdateProgress }))
@@ -458,5 +521,10 @@ function Page:OnEvent(Name, A)
 	end
 	return false
 end
+
+Page:SetInterval(.1, function()
+	PreviewFrame = PreviewFrame + 1
+	return Sections[Current].ID == "lockscreen"
+end)
 
 Page:Run()
