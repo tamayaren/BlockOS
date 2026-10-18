@@ -52,6 +52,7 @@ local Deferred = {}
 local Ghost = nil
 local PendingLock = false
 local PendingUnlock = false
+local FadeLevel = 1
 
 local Redraw, ScheduleRedraw, Focus, Launch, Notify, Lock, CloseProc, Kill, OpenMenu, Multishell
 
@@ -101,6 +102,13 @@ end
 
 local function AnimationsEnabled()
 	return Config.Settings().Animations ~= false
+end
+
+-- Dims the whole screen; 1 is normal colours, 0 is black.
+local function SetFadeLevel(Level)
+	if (not Gfx.SetFade(Screen, Level)) then return false end
+	FadeLevel = Level
+	return true
 end
 
 -- Animations run from the desktop's main loop, never inside an app's coroutine.
@@ -336,6 +344,8 @@ local function Spawn(Opts)
 	Proc.Fullscreen = Opts.Mode == "fullscreen"
 	local X, Y, W, H = ContentRect(Proc)
 	Proc.Window = window.create(Screen, X, Y, W, H, false)
+	-- Windows copy their parent's palette, so one made mid-fade would keep the dimmed colours.
+	if (FadeLevel < 1) then Gfx.SetFade(Proc.Window, 1) end
 	Proc.Term = MakeProxy(Proc)
 	Proc.Redirect = Proc.Term
 	Proc.Co = coroutine.create(Opts.Fn)
@@ -1823,7 +1833,7 @@ end
 
 local function Fade(From, To, Steps)
 	for Step = 1, Steps do
-		if (not Gfx.SetFade(Native, From + (To - From) * Step / Steps)) then return end
+		if (not SetFadeLevel(From + (To - From) * Step / Steps)) then return end
 		Wait(FrameTime)
 	end
 end
@@ -1908,7 +1918,7 @@ local function RunAnimations()
 			Ghost = nil
 			PendingLock, PendingUnlock = false, false
 			if (Animation.Proc) then Animation.Proc.Opening = nil end
-			Gfx.SetFade(Native, 1)
+			SetFadeLevel(1)
 			Log("animation: " .. tostring(Err))
 			Redraw()
 		end
@@ -2033,15 +2043,17 @@ function Desktop.Run(Shell)
 	RootShell = Shell
 	Native = term.current()
 	ScreenW, ScreenH = Native.getSize()
+	-- The boot screen ends faded to black; restore the palette before any window copies it.
+	Gfx.SetFade(Native, 1)
 	Screen = window.create(Native, 1, 1, ScreenW, ScreenH, true)
 	Hidden = window.create(Screen, 1, 1, 1, 1, false)
 	term.redirect(Screen)
 	InstallAPI()
 	RefreshApps()
 	ClockTimer = os.startTimer(1)
-	-- The boot screen ends faded to black; fade the first screen in.
-	if (not (AnimationsEnabled() and Gfx.SetFade(Native, 0) and QueueAnimation({ Kind = "fadein" }))) then
-		Gfx.SetFade(Native, 1)
+	-- Fade the first screen in from black.
+	if (not (AnimationsEnabled() and SetFadeLevel(0) and QueueAnimation({ Kind = "fadein" }))) then
+		SetFadeLevel(1)
 	end
 	if (Config.Settings().AutoLogin) then
 		StartSession()
