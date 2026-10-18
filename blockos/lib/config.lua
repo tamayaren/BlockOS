@@ -15,6 +15,7 @@ Config.Defaults = {
 		DockSize = "small",
 		DockStyle = "solid",
 		Animations = true,
+		NetworkVisible = true,
 		LockColors = "accent",
 		Clock24 = true,
 		ClockSource = "real",

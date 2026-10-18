@@ -53,6 +53,7 @@ local Ghost = nil
 local PendingLock = false
 local PendingUnlock = false
 local FadeLevel = 1
+local FullscreenHinted = false
 
 local Redraw, ScheduleRedraw, Focus, Launch, Notify, Lock, CloseProc, Kill, OpenMenu, Multishell
 
@@ -116,6 +117,12 @@ local function QueueAnimation(Animation)
 	if (not AnimationsEnabled()) then return false end
 	table.insert(AnimationQueue, Animation)
 	return true
+end
+
+local function HintFullscreen()
+	if (FullscreenHinted) then return end
+	FullscreenHinted = true
+	Notify("Full Screen", "Click the top-left corner to show the window buttons.", { Sound = false, Duration = 7 })
 end
 
 local function WindowRect(Proc)
@@ -342,6 +349,7 @@ local function Spawn(Opts)
 	Proc.Y = AreaY + (Count % 3)
 	ClampWindow(Proc)
 	Proc.Fullscreen = Opts.Mode == "fullscreen"
+	if (Proc.Fullscreen) then HintFullscreen() end
 	local X, Y, W, H = ContentRect(Proc)
 	Proc.Window = window.create(Screen, X, Y, W, H, false)
 	-- Windows copy their parent's palette, so one made mid-fade would keep the dimmed colours.
@@ -377,11 +385,31 @@ local function ProgramFn(Path, Args, Hold)
 	end
 end
 
+local function LaunchpadSeed()
+	local W, H = math.max(3, math.floor(ScreenW / 6)), math.max(2, math.floor(ScreenH / 6))
+	return { math.floor((ScreenW - W) / 2) + 1, math.floor((ScreenH - H) / 2) + 1, W, H }
+end
+
+local function CloseLaunchpad()
+	if (not Launchpad.Open) then return end
+	if (not QueueAnimation({ Kind = "launchpad" })) then
+		Launchpad.Open = false
+		Redraw()
+	end
+end
+
 local function ToggleLaunchpad()
-	Launchpad.Open = not Launchpad.Open
+	Menu = nil
+	if (Launchpad.Open) then
+		CloseLaunchpad()
+		return
+	end
+	Launchpad.Open = true
 	Launchpad.Query = ""
 	Launchpad.Page = 1
-	Menu = nil
+	if (QueueAnimation({ Kind = "launchpad", Opening = true })) then
+		Launchpad.Rect = LaunchpadSeed()
+	end
 	Redraw()
 end
 
@@ -559,6 +587,7 @@ end
 local function ToggleFullscreen(Proc)
 	if (not Proc) then return end
 	Proc.Fullscreen = not Proc.Fullscreen
+	if (Proc.Fullscreen) then HintFullscreen() end
 	RevealUntil = nil
 	if (not Proc.Fullscreen) then
 		ClampWindow(Proc)
@@ -791,6 +820,11 @@ end
 
 local function DrawLaunchpad(Th)
 	Launchpad.Regions = {}
+	if (Launchpad.Rect) then
+		local Rect = Launchpad.Rect
+		Gfx.Fill(Screen, Rect[1], Rect[2], Rect[3], Rect[4], colors.gray, colors.lightGray, "\127")
+		return
+	end
 	Gfx.Fill(Screen, 1, 1, ScreenW, ScreenH, colors.gray, colors.lightGray, "\127")
 	local SearchW = math.min(24, ScreenW - 4)
 	local SearchX = math.floor((ScreenW - SearchW) / 2) + 1
@@ -863,8 +897,13 @@ end
 local function DrawMenu(Th)
 	local Current = Menu
 	local Height = #Current.Items
-	Gfx.Fill(Screen, Current.X, Current.Y, Current.W, Height, Th.MenuBg)
-	for Index, Item in ipairs(Current.Items) do
+	local Shown = Current.Reveal or Height
+	-- Dock menus sit above the dock, so they unroll upwards.
+	local First = Current.Up and (Height - Shown + 1) or 1
+	local Last = Current.Up and Height or Shown
+	Gfx.Fill(Screen, Current.X, Current.Y + First - 1, Current.W, Last - First + 1, Th.MenuBg)
+	for Index = First, Last do
+		local Item = Current.Items[Index]
 		local Y = Current.Y + Index - 1
 		if (Item == "-") then
 			Gfx.Write(Screen, Current.X, Y, string.rep("\140", Current.W), Th.MenuDim, Th.MenuBg)
@@ -878,7 +917,9 @@ local function DrawMenu(Th)
 			Gfx.Write(Screen, Current.X, Y, Gfx.Pad(Prefix .. Item.Text, Current.W - #Hint - 1) .. Hint .. " ", Fg, Bg)
 		end
 	end
-	Gfx.Shadow(Screen, Current.X, Current.Y, Current.W, Height, Th.Shadow)
+	if (not Current.Reveal) then
+		Gfx.Shadow(Screen, Current.X, Current.Y, Current.W, Height, Th.Shadow)
+	end
 end
 
 local function DrawDialog(Th)
@@ -1106,6 +1147,24 @@ local function UpdateService()
 	end
 end
 
+local function PresenceService()
+	local Presence = BlockOS.Require("presence")
+	Presence.OpenModems()
+	Presence.Locate()
+	local Timer = os.startTimer(60)
+	while (true) do
+		local Event, A, B, C = os.pullEvent()
+		if (Event == "rednet_message" and C == Presence.Protocol) then
+			Presence.Answer(A, B)
+		elseif (Event == "timer" and A == Timer) then
+			Presence.Locate()
+			Timer = os.startTimer(Presence.Position and 60 or 300)
+		elseif (Event == "peripheral") then
+			Presence.OpenModems()
+		end
+	end
+end
+
 local function StartSession()
 	if (SessionStarted) then return end
 	SessionStarted = true
@@ -1113,6 +1172,7 @@ local function StartSession()
 	RefreshApps()
 	StartService("scheduler", SchedulerService)
 	StartService("chat", ChatService)
+	StartService("presence", PresenceService)
 	StartService("updater", UpdateService)
 	for _, ID in ipairs(Config.Settings().StartupApps or {}) do
 		Launch(ID)
@@ -1265,8 +1325,12 @@ function OpenMenu(Name, X, Y, Items)
 		X = math.max(1, math.min(X or 1, ScreenW - W)),
 		Y = math.max(1, Y),
 		W = W,
-		Hover = 0
+		Hover = 0,
+		Up = Name == "dock"
 	}
+	if (#Items > 1 and QueueAnimation({ Kind = "menu", Menu = Menu })) then
+		Menu.Reveal = 1
+	end
 	Redraw()
 end
 
@@ -1391,8 +1455,7 @@ local function LaunchpadClick(X, Y)
 		end
 	end
 	if (Y == 2 or Y == ScreenH) then return end
-	Launchpad.Open = false
-	Redraw()
+	CloseLaunchpad()
 end
 
 local function OnClick(Button, X, Y)
@@ -1438,6 +1501,10 @@ local function OnClick(Button, X, Y)
 	end
 	local FullFocus = FocusedFullscreen()
 	local Revealed = FullFocus and RevealActive()
+	if (FullFocus and not Revealed and Y == 1 and (X <= 2 or Button == 2)) then
+		RevealTopbar()
+		return
+	end
 	if (Y == 1 and (not FullFocus or Revealed)) then
 		TopbarClick(Button, X)
 		return
@@ -1639,7 +1706,7 @@ local function OnKey(Name, Key, Held)
 		if (Name ~= "key") then return end
 		if (Key == keys.backspace) then
 			if (#Launchpad.Query == 0) then
-				Launchpad.Open = false
+				CloseLaunchpad()
 			else
 				Launchpad.Query = Launchpad.Query:sub(1, -2)
 			end
@@ -1887,18 +1954,104 @@ function Players.toastout(Animation)
 	Redraw()
 end
 
+local function CaptureScreen()
+	local Rows = {}
+	for Y = 1, ScreenH do
+		Rows[Y] = { Screen.getLine(Y) }
+	end
+	return Rows
+end
+
+local function PaintRows(Rows)
+	for Y = 1, ScreenH do
+		Screen.setCursorPos(1, Y)
+		Screen.blit(Rows[Y][1], Rows[Y][2], Rows[Y][3])
+	end
+end
+
+-- Bleeds one screen into another cell by cell, spreading out from the middle.
+local function Dissolve(From, To, Frames)
+	local MidX, MidY = (ScreenW + 1) / 2, (ScreenH + 1) / 2
+	local Reach = math.sqrt(MidX ^ 2 + (MidY * 1.5) ^ 2)
+	local Ranks = {}
+	for Y = 1, ScreenH do
+		Ranks[Y] = {}
+		for X = 1, ScreenW do
+			local Distance = math.sqrt((X - MidX) ^ 2 + ((Y - MidY) * 1.5) ^ 2) / Reach
+			Ranks[Y][X] = Distance * .5 + math.random() * .45
+		end
+	end
+	for Frame = 1, Frames do
+		local Cut = EaseIn(Frame / Frames)
+		for Y = 1, ScreenH do
+			local Old, New, Rank = From[Y], To[Y], Ranks[Y]
+			local Text, Fg, Bg = {}, {}, {}
+			for X = 1, ScreenW do
+				local Source = (Rank[X] < Cut) and New or Old
+				Text[X] = Source[1]:sub(X, X)
+				Fg[X] = Source[2]:sub(X, X)
+				Bg[X] = Source[3]:sub(X, X)
+			end
+			Screen.setCursorPos(1, Y)
+			Screen.blit(table.concat(Text), table.concat(Fg), table.concat(Bg))
+		end
+		Wait(FrameTime)
+	end
+end
+
 function Players.lock()
-	Fade(1, 0, 4)
+	local From = CaptureScreen()
 	EnterLock()
-	Fade(0, 1, 4)
+	local To = CaptureScreen()
+	-- Nothing reaches the monitor until we yield, so the lock screen never flashes up early.
+	PaintRows(From)
+	Dissolve(From, To, 16)
 	PendingLock = false
+	if (LockScreen) then LockScreen:Draw() end
 end
 
 function Players.unlock()
-	Fade(1, 0, 4)
+	local From = CaptureScreen()
 	PendingUnlock = false
 	Unlock()
-	Fade(0, 1, 4)
+	local To = CaptureScreen()
+	PaintRows(From)
+	Dissolve(From, To, 12)
+	Redraw()
+end
+
+function Players.menu(Animation)
+	local Current = Animation.Menu
+	local Count = #Current.Items
+	local Frames = 5
+	for Frame = 1, Frames - 1 do
+		if (Menu ~= Current) then return end
+		Current.Reveal = math.max(1, math.ceil(Count * Frame / Frames))
+		Redraw()
+		Wait(FrameTime)
+	end
+	Current.Reveal = nil
+	if (Menu == Current) then Redraw() end
+end
+
+function Players.launchpad(Animation)
+	local Full = { 1, 1, ScreenW, ScreenH }
+	local Seed = LaunchpadSeed()
+	local From, To = Seed, Full
+	if (not Animation.Opening) then From, To = Full, Seed end
+	for Frame = 1, 4 do
+		if (not Launchpad.Open) then break end
+		local T = Animation.Opening and EaseOut(Frame / 4) or EaseIn(Frame / 4)
+		Launchpad.Rect = {
+			Lerp(From[1], To[1], T), Lerp(From[2], To[2], T),
+			math.max(1, Lerp(From[3], To[3], T)), math.max(1, Lerp(From[4], To[4], T))
+		}
+		Redraw()
+		Wait(FrameTime)
+	end
+	Launchpad.Rect = nil
+	if (not Animation.Opening) then Launchpad.Open = false end
+	Redraw()
 end
 
 function Players.fadein()
@@ -1916,6 +2069,8 @@ local function RunAnimations()
 		local Ok, Err = pcall(Players[Animation.Kind], Animation)
 		if (not Ok) then
 			Ghost = nil
+			Launchpad.Rect = nil
+			if (Menu) then Menu.Reveal = nil end
 			PendingLock, PendingUnlock = false, false
 			if (Animation.Proc) then Animation.Proc.Opening = nil end
 			SetFadeLevel(1)

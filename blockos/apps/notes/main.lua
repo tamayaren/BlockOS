@@ -316,6 +316,12 @@ function Build()
 		Build()
 	end }))
 	Page:Add(Ui.Button.new({ X = 9, Y = 1, Text = " Delete ", Style = "plain", Bg = "Panel", OnClick = DeleteCurrent }))
+	if (W >= 34) then
+		Page:Add(Ui.Button.new({ X = 18, Y = 1, Text = " Print ", Style = "plain", Bg = "Panel", OnClick = function()
+			Save()
+			if (Doc.Path) then BlockOS.Launch("print", { Doc.Path }) end
+		end }))
+	end
 	if (Layout.SideW == 0) then
 		Page:Add(Ui.Button.new({ X = W - 7, Y = 1, W = 7, Text = "Notes \31", Style = "plain", Bg = "Panel", OnClick = function()
 			local Names = {}

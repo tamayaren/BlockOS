@@ -367,6 +367,7 @@ function Builders.network(X, Y, W)
 			BlockOS.Notify("Messages", "Nickname set to " .. Nick.Value, { Sound = false })
 		end
 	end }))
+	ToggleRow(Row + 2, "Visible in the Network app", "NetworkVisible")
 end
 
 function Builders.startup(X, Y, W, H)

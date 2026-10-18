@@ -7,6 +7,7 @@ local Apps = BlockOS.Require("apps")
 local Args = { ... }
 
 local AppsPath = "apps:"
+local Printable = { txt = true, md = true, log = true }
 local Current = Args[1] or "/home"
 local Back, Forward = {}, {}
 local Page = Ui.Page.new()
@@ -294,6 +295,10 @@ local function FileMenu(Item, X, Y)
 		{ Text = "Get Info" },
 		{ Text = "Delete", Disabled = Locked }
 	}
+	local Extension = (fs.getName(Item.Path):match("%.(%w+)$") or ""):lower()
+	if (not Item.IsDir and Printable[Extension]) then
+		table.insert(Options, 4, { Text = "Print" })
+	end
 	local Index = Ui.ContextMenu(X, Y, Options)
 	local Choice = Index and Options[Index].Text
 	if (Choice == "Open") then
@@ -302,6 +307,8 @@ local function FileMenu(Item, X, Y)
 		BlockOS.Launch("editor", { Item.Path })
 	elseif (Choice == "Run") then
 		BlockOS.Launch(Item.Path, {}, { Hold = true })
+	elseif (Choice == "Print") then
+		BlockOS.Launch("print", { Item.Path })
 	elseif (Choice == "Rename") then
 		local Name = Ui.Prompt("Rename", "New name:", fs.getName(Item.Path))
 		if (Name and #Name > 0 and Name ~= fs.getName(Item.Path)) then

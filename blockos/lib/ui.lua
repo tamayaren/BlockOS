@@ -743,14 +743,41 @@ end
 -- current page's timers and background events flowing.
 --
 
+local function AnimationsEnabled()
+	local Ok, Config = pcall(BlockOS.Require, "config")
+	return not (Ok and Config.Settings().Animations == false)
+end
+
+-- Grows a menu downwards over a few frames, keeping any events that arrive meanwhile.
+local function Unroll(Modal, Pending)
+	local FullH = Modal.H
+	local Frames = 3
+	for Frame = 1, Frames do
+		local H = math.max(1, math.ceil(FullH * (1 - (1 - Frame / (Frames + 1)) ^ 2)))
+		Modal.Buffer.reposition(Modal.X, Modal.Y, Modal.W, H)
+		Modal:Draw()
+		local Timer = os.startTimer(.05)
+		while (true) do
+			local Event = table.pack(os.pullEventRaw())
+			if (Event[1] == "timer" and Event[2] == Timer) then break end
+			table.insert(Pending, Event)
+		end
+	end
+	Modal.Buffer.reposition(Modal.X, Modal.Y, Modal.W, FullH)
+end
+
 local function RunModal(Modal)
 	local Previous = Ui.Current
 	Ui.Current = Modal
 	Modal.Running = true
 	if (Modal.OnLayout) then Modal:OnLayout(Modal.W, Modal.H) end
+	local Pending = {}
+	if (Modal.Unroll and Modal.H > 1 and AnimationsEnabled()) then
+		Unroll(Modal, Pending)
+	end
 	Modal:Draw()
 	while (Modal.Running) do
-		local Event = table.pack(os.pullEventRaw())
+		local Event = table.remove(Pending, 1) or table.pack(os.pullEventRaw())
 		local Name = Event[1]
 		TrackModifiers(Name, Event[2])
 		if (Name == "terminate") then
@@ -928,7 +955,7 @@ function Ui.ContextMenu(X, Y, Items)
 	local H = #Items
 	X = math.max(1, math.min(X, ScreenW - W + 1))
 	Y = math.max(1, math.min(Y, ScreenH - H + 1))
-	local Modal = Ui.Page.new({ Parent = Parent, X = X, Y = Y, W = W, H = H, Bg = "MenuBg" })
+	local Modal = Ui.Page.new({ Parent = Parent, X = X, Y = Y, W = W, H = H, Bg = "MenuBg", Unroll = true })
 	Modal.Hover = 0
 	function Modal:OnDraw(T, Th)
 		for Index, Item in ipairs(Items) do
