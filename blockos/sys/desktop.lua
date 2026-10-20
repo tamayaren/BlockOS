@@ -622,9 +622,13 @@ end
 -- Drawing
 --
 
-local function DrawWallpaper()
+local function WallpaperRows()
 	local Settings = Config.Settings()
-	local Rows = Wallpaper.Render(Settings.Wallpaper, ScreenW, ScreenH, Settings.WallpaperColor, Settings.WallpaperImage)
+	return Wallpaper.Render(Settings.Wallpaper, ScreenW, ScreenH, Settings.WallpaperColor, Settings.WallpaperImage)
+end
+
+local function DrawWallpaper()
+	local Rows = WallpaperRows()
 	for Y = 1, ScreenH do
 		Screen.setCursorPos(1, Y)
 		Screen.blit(Rows[Y][1], Rows[Y][2], Rows[Y][3])
@@ -681,37 +685,95 @@ local function AppName()
 	return "BlockOS"
 end
 
+local BlurSource, BlurRow
+
+-- Smears the top of the wallpaper into blocks of its most common background colour.
+local function BlurredRow(Rows)
+	if (BlurSource == Rows) then return BlurRow end
+	local Radius = 3
+	local Depth = math.min(3, #Rows)
+	local Out = {}
+	for X = 1, ScreenW do
+		local Counts, Best, BestCount = {}, Rows[1][3]:sub(X, X), 0
+		for Y = 1, Depth do
+			local Line = Rows[Y][3]
+			for Column = math.max(1, X - Radius), math.min(#Line, X + Radius) do
+				local Color = Line:sub(Column, Column)
+				local Count = (Counts[Color] or 0) + 1
+				Counts[Color] = Count
+				if (Count > BestCount) then
+					Best, BestCount = Color, Count
+				end
+			end
+		end
+		Out[X] = Best
+	end
+	BlurSource, BlurRow = Rows, table.concat(Out)
+	return BlurRow
+end
+
+-- The menu bar row before any text: solid theme colour, the wallpaper itself, or a blurred copy of it.
+local function TopbarBackground(Th, Style)
+	if (Style == "clear") then
+		local Row = WallpaperRows()[1]
+		return Row[1], Row[2], Row[3]
+	elseif (Style == "blur") then
+		return string.rep(" ", ScreenW), string.rep(Gfx.ToBlit(Th.TopbarFg), ScreenW), BlurredRow(WallpaperRows())
+	end
+	return string.rep(" ", ScreenW), string.rep(Gfx.ToBlit(Th.TopbarFg), ScreenW), string.rep(Gfx.ToBlit(Th.TopbarBg), ScreenW)
+end
+
 local function DrawTopbar(Th)
 	TopbarRegions = {}
-	Gfx.Fill(Screen, 1, 1, ScreenW, 1, Th.TopbarBg)
+	local Style = Config.Settings().TopbarStyle or "solid"
+	-- The wallpaper is hidden behind a full-screen app, so its revealed menu bar stays solid.
+	if (FocusedFullscreen()) then Style = "solid" end
+	local Chars, Fgs, Bgs = TopbarBackground(Th, Style)
+	Screen.setCursorPos(1, 1)
+	Screen.blit(Chars, Fgs, Bgs)
+	-- Text without a colour picks black or white to stand out from the cell behind it.
+	local function Put(X, Text, Fg)
+		if (X < 1 or X + #Text - 1 > ScreenW) then return end
+		local Bg = Bgs:sub(X, X + #Text - 1)
+		local FgRow
+		if (Fg) then
+			FgRow = string.rep(Gfx.ToBlit(Fg), #Text)
+		elseif (Style == "solid") then
+			FgRow = string.rep(Gfx.ToBlit(Th.TopbarFg), #Text)
+		else
+			FgRow = Bg:gsub(".", Gfx.ContrastBlit)
+		end
+		Screen.setCursorPos(X, 1)
+		Screen.blit(Text, FgRow, Bg)
+	end
 	Screen.setCursorPos(2, 1)
 	Screen.blit("\131", Gfx.ToBlit(colors.lime), Gfx.ToBlit(colors.brown))
 	table.insert(TopbarRegions, { X = 1, W = 3, Menu = "logo" })
 	local X = 4
 	local Name = Gfx.Truncate(AppName(), 14)
-	Gfx.Write(Screen, X, 1, Name, Th.TopbarFg, Th.TopbarBg)
+	Put(X, Name)
 	table.insert(TopbarRegions, { X = X - 1, W = #Name + 2, Menu = "app" })
 	X = X + #Name + 2
 	for _, Title in ipairs({ "Go", "Window" }) do
 		if (X + #Title < ScreenW - 12) then
-			Gfx.Write(Screen, X, 1, Title, Th.TopbarFg, Th.TopbarBg)
+			Put(X, Title)
 			table.insert(TopbarRegions, { X = X - 1, W = #Title + 2, Menu = Title:lower() })
 			X = X + #Title + 2
 		end
 	end
 	local Clock = FormatClock()
 	local Right = ScreenW - #Clock
-	Gfx.Write(Screen, Right, 1, Clock, Th.TopbarFg, Th.TopbarBg)
+	Put(Right, Clock)
 	table.insert(TopbarRegions, { X = Right, W = #Clock, Action = "clock" })
 	local Status = UpdateStatus()
 	if (Status == "available" or Status == "ready") then
 		Right = Right - 3
-		Gfx.Write(Screen, Right, 1, "\24", Th.Accent, Th.TopbarBg)
+		Put(Right, "\24", (Style == "solid") and Th.Accent or nil)
 		table.insert(TopbarRegions, { X = Right - 1, W = 3, Action = "update" })
 	end
 	if (Recording) then
 		Right = Right - 7
-		Gfx.Write(Screen, Right, 1, "\7 REC", colors.red, Th.TopbarBg)
+		Put(Right, "\7 REC", colors.red)
 		table.insert(TopbarRegions, { X = Right - 1, W = 7, Action = "recording" })
 	end
 end

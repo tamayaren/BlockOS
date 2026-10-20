@@ -3,6 +3,8 @@
 
 local Protocol = "blockos_turtle"
 local ConfigPath = "/blockos/data/agent.dat"
+-- Scripts sent from the Turtles app are saved here before they run.
+local ScriptDir = "/blockos/data/scripts"
 
 local function ReadConfig()
 	if (not fs.exists(ConfigPath)) then return {} end
@@ -114,9 +116,9 @@ local function Status()
 	}
 end
 
-local function StartJob(Command)
+local function StartJob(Command, Name)
 	Job = {
-		Name = Command,
+		Name = Name or Command,
 		Co = coroutine.create(function()
 			SetColor(colors.white, colors.black)
 			term.clear()
@@ -125,7 +127,7 @@ local function StartJob(Command)
 			shell.run(Command)
 		end)
 	}
-	LastAction = "Job: " .. Command
+	LastAction = "Job: " .. Job.Name
 	local Ok, Filter = coroutine.resume(Job.Co)
 	if (not Ok or coroutine.status(Job.Co) == "dead") then
 		Job = nil
@@ -186,6 +188,21 @@ local function Handle(Sender, Message)
 			Reply.Error = "Busy running " .. Job.Name
 		else
 			StartJob(tostring(Args.Command or ""))
+			Reply.Ok = true
+		end
+	elseif (Message.Cmd == "script") then
+		local Name = fs.getName(tostring(Args.Name or "script.lua")):gsub("[^%w%._%-]", "")
+		if (#Name == 0) then Name = "script.lua" end
+		local Path = fs.combine(ScriptDir, Name)
+		if (not fs.exists(ScriptDir)) then fs.makeDir(ScriptDir) end
+		local Handle = type(Args.Source) == "string" and fs.open(Path, "w")
+		if (not Handle) then
+			Reply.Error = "Cannot save script"
+		else
+			Handle.write(Args.Source)
+			Handle.close()
+			local Extra = tostring(Args.Args or ""):gsub("^%s+", ""):gsub("%s+$", "")
+			StartJob("/" .. Path .. ((#Extra > 0) and (" " .. Extra) or ""), Name .. ((#Extra > 0) and (" " .. Extra) or ""))
 			Reply.Ok = true
 		end
 	elseif (Message.Cmd == "stop") then

@@ -1,4 +1,4 @@
--- Settings: appearance, dock, users, notifications, network, login items and software update.
+-- Settings: appearance, storage, dock, users, notifications, network, login items and software update.
 
 local Ui = BlockOS.Require("ui")
 local Gfx = BlockOS.Require("gfx")
@@ -18,6 +18,7 @@ local Build
 
 local Sections = {
 	{ ID = "general", Name = "General", Icon = "\15" },
+	{ ID = "storage", Name = "Storage", Icon = "\127" },
 	{ ID = "appearance", Name = "Appearance", Icon = "\4" },
 	{ ID = "dock", Name = "Dock", Icon = "\22" },
 	{ ID = "lockscreen", Name = "Lock Screen", Icon = "\8" },
@@ -41,6 +42,8 @@ local WallpaperColours = {
 	colors.cyan, colors.green, colors.purple, colors.red, colors.orange
 }
 local DarkText = { [colors.white] = true, [colors.lightGray] = true, [colors.yellow] = true, [colors.cyan] = true }
+-- Storage usage from the last scan, so switching sections does not walk the disk again.
+local Usage = nil
 
 local function Save()
 	Config.Save("settings")
@@ -136,11 +139,12 @@ function Builders.appearance(X, Y, W, H)
 			Save()
 		end
 	}))
-	Page:Add(Ui.Label.new({ X = X, Y = Y + 2, Text = "Accent" }))
-	Swatches(X + 11, Y + 2, Theme.Accents, function() return Settings.Accent end, function(Color)
+	Page:Add(Ui.Label.new({ X = X, Y = Y + 1, Text = "Accent" }))
+	Swatches(X + 11, Y + 1, Theme.Accents, function() return Settings.Accent end, function(Color)
 		Settings.Accent = Color
 		Save()
 	end)
+	ChoiceRow(Y + 2, "Menu bar", "TopbarStyle", { "Solid", "Clear", "Blur" }, { "solid", "clear", "blur" }, "solid")
 	Page:Add(Ui.Label.new({ X = X, Y = Y + 4, Text = "Wallpaper" }))
 	local Items = {}
 	local Selected = 1
@@ -180,6 +184,142 @@ function Builders.appearance(X, Y, W, H)
 			if (not Coloured) then Settings.Wallpaper = "solid" end
 			Save()
 		end)
+	end
+end
+
+-- Size in bytes of a file, or of everything inside a folder.
+local function SizeOf(Path)
+	if (not fs.exists(Path)) then return 0 end
+	if (not fs.isDir(Path)) then return fs.getSize(Path) end
+	local Total = 0
+	for _, Name in ipairs(fs.list(Path)) do
+		Total = Total + SizeOf(fs.combine(Path, Name))
+	end
+	return Total
+end
+
+-- Splits the computer's own drive into categories and measures every app.
+local function ScanStorage()
+	local Categories = {
+		{ Name = "System", Color = colors.blue, Size = 0 },
+		{ Name = "Apps", Color = colors.orange, Size = SizeOf("/blockos/userapps") },
+		{ Name = "Home", Color = colors.lime, Size = SizeOf("/home") },
+		{ Name = "Data", Color = colors.purple, Size = SizeOf("/blockos/data") },
+		{ Name = "Other", Color = colors.lightGray, Size = 0 }
+	}
+	local Skip = { blockos = true, home = true }
+	for _, Name in ipairs(fs.list("/")) do
+		if (not Skip[Name] and fs.getDrive(Name) == "hdd") then
+			local Size = SizeOf(Name)
+			if (Name == "startup.lua") then
+				Categories[1].Size = Categories[1].Size + Size
+			else
+				Categories[5].Size = Categories[5].Size + Size
+			end
+		end
+	end
+	local Own = { data = true, userapps = true }
+	for _, Name in ipairs(fs.list("/blockos")) do
+		if (not Own[Name]) then
+			Categories[1].Size = Categories[1].Size + SizeOf(fs.combine("/blockos", Name))
+		end
+	end
+	local Used = 0
+	for _, Category in ipairs(Categories) do
+		Used = Used + Category.Size
+	end
+	local AppSizes = {}
+	for _, App in ipairs(Apps.List(true)) do
+		if (App.Builtin ~= "launchpad") then
+			table.insert(AppSizes, { App = App, Size = SizeOf(App.Dir) })
+		end
+	end
+	table.sort(AppSizes, function(A, B) return A.Size > B.Size end)
+	local Free = fs.getFreeSpace("/")
+	local Capacity = fs.getCapacity and fs.getCapacity("/") or nil
+	return {
+		Categories = Categories,
+		Apps = AppSizes,
+		Used = Used,
+		Free = Free,
+		Capacity = (type(Capacity) == "number" and Capacity > 0) and Capacity or (Used + Free)
+	}
+end
+
+function Builders.storage(X, Y, W, H)
+	if (not Usage) then
+		Page:Add(Ui.Label.new({ X = X, Y = Y, W = W, Text = "Measuring...", Fg = "SubText" }))
+		Page:Draw()
+		Usage = ScanStorage()
+		Build()
+		return
+	end
+	Page:Add(Ui.Canvas.new({
+		X = X, Y = Y, W = W, H = 1,
+		OnDraw = function(Self, T, Th)
+			Gfx.Fill(T, Self.X, Self.Y, Self.W, 1, Th.Border)
+			local Left = Self.X
+			local Total = 0
+			for _, Category in ipairs(Usage.Categories) do
+				Total = Total + Category.Size
+				-- Rounds the running total so small categories never push the bar past its end.
+				local Right = Self.X + math.floor(Self.W * math.min(1, Total / Usage.Capacity) + .5)
+				if (Category.Size > 0 and Right <= Left) then Right = Left + 1 end
+				Right = math.min(Right, Self.X + Self.W)
+				Gfx.Fill(T, Left, Self.Y, Right - Left, 1, Category.Color)
+				Left = Right
+			end
+		end
+	}))
+	Page:Add(Ui.Label.new({ X = X, Y = Y + 1, W = W, Fg = "SubText", Text = Gfx.FormatSize(Usage.Used) .. " used, " .. Gfx.FormatSize(Usage.Free) .. " free of " .. Gfx.FormatSize(Usage.Capacity) }))
+	Page:Add(Ui.Canvas.new({
+		X = X, Y = Y + 2, W = W, H = 2,
+		OnDraw = function(Self, T, Th)
+			local CX, CY = Self.X, Self.Y
+			for _, Category in ipairs(Usage.Categories) do
+				local Text = Category.Name .. " " .. Gfx.FormatSize(Category.Size)
+				if (CX > Self.X and CX + #Text + 2 > Self.X + Self.W) then
+					CX, CY = Self.X, CY + 1
+				end
+				if (CY >= Self.Y + Self.H) then break end
+				Gfx.Write(T, CX, CY, "\7", Category.Color, Th.WindowBg)
+				Gfx.Write(T, CX + 1, CY, Gfx.Truncate(Text, Self.X + Self.W - CX - 1), Th.Text, Th.WindowBg)
+				CX = CX + #Text + 3
+			end
+		end
+	}))
+	local Heading = (W >= 25) and (Gfx.Pad("Apps by size", W - 11) .. "\7 installed") or "Apps by size"
+	Page:Add(Ui.Label.new({ X = X, Y = Y + 4, W = W, Text = Heading, Fg = "SubText" }))
+	local Items = {}
+	for _, Entry in ipairs(Usage.Apps) do
+		table.insert(Items, {
+			Text = Entry.App.Name .. (Entry.App.System and "" or " \7"),
+			Icon = Gfx.Pad(Entry.App.Icon.Lines[1], 3), IconFg = Entry.App.Icon.Bg,
+			Right = Gfx.FormatSize(Entry.Size), App = Entry.App
+		})
+	end
+	local List = Page:Add(Ui.List.new({ X = X, Y = Y + 5, W = W, H = math.max(1, H - 7), Items = Items, Bg = "Panel" }))
+	local ButtonY = Y + H - 1
+	Page:Add(Ui.Button.new({ X = X, Y = ButtonY, Text = " Refresh ", OnClick = function()
+		Usage = nil
+		Build()
+	end }))
+	local function Uninstall()
+		local Item = List.Items[List.Selected]
+		if (not Item) then return end
+		if (Item.App.System) then
+			Ui.Alert("Storage", Item.App.Name .. " comes with BlockOS and cannot be removed.")
+			return
+		end
+		if (Ui.Confirm("Uninstall", "Remove " .. Item.App.Name .. " and free " .. Item.Right .. "?", "Uninstall")) then
+			Apps.Uninstall(Item.App.ID)
+			Usage = nil
+			Build()
+		end
+	end
+	Page:Add(Ui.Button.new({ X = X + 10, Y = ButtonY, Text = " Uninstall ", Style = "danger", OnClick = Uninstall }))
+	List.OnContext = function(_, Index, _, MX, MY)
+		if (Index and Ui.ContextMenu(MX, MY, { "Uninstall" }) == 1) then Uninstall() end
 	end
 end
 
@@ -521,7 +661,8 @@ function Page:OnEvent(Name, A)
 		Build()
 		return true
 	elseif (Name == "blockos_settings" or Name == "peripheral" or Name == "peripheral_detach") then
-		if (Sections[Current].ID ~= "general") then Build() end
+		local ID = Sections[Current].ID
+		if (ID ~= "general" and ID ~= "storage") then Build() end
 		return true
 	end
 	return false

@@ -70,6 +70,10 @@ local function Migrate(Config)
 	if (fs.exists("/blockos/apps/btunes") and fs.exists("/blockos/apps/musicstream")) then
 		fs.delete("/blockos/apps/musicstream")
 	end
+	-- Calculator moved from the App Store into BlockOS; drop the old store copy.
+	if (fs.exists("/blockos/apps/calculator") and fs.exists("/blockos/userapps/calculator")) then
+		fs.delete("/blockos/userapps/calculator")
+	end
 	local Settings = Config.Settings()
 	local Changed = false
 	for _, List in ipairs({ Settings.Dock or {}, Settings.StartupApps or {} }) do

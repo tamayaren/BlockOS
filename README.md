@@ -42,7 +42,7 @@ turtle over rednet (basic turtles get the agent automatically).
 
 | Area | What it does |
 | --- | --- |
-| Menu bar | Block logo menu (About, Settings, App Store, Force Quit, Lock, Log Out, Restart, Shut Down), the app's name, **Go** and **Window** menus, an update arrow when one is available, and the clock. |
+| Menu bar | Block logo menu (About, Settings, App Store, Force Quit, Lock, Log Out, Restart, Shut Down), the app's name, **Go** and **Window** menus, an update arrow when one is available, and the clock. Solid, clear (the wallpaper shows through) or blur (the wallpaper's colours smoothed into soft blocks) in **Settings → Appearance**. |
 | Dock | Pinned apps, running apps (dot underneath) and a Messages unread badge. Right-click an icon to open, quit, or keep it in the dock. Small (2 rows, the default) or large, solid or clear (no background, just the icons and running dots) in **Settings → Dock**. |
 | Windows | Drag the title bar to move, drag the bottom-right corner to resize. Red closes, yellow minimizes, green goes full screen. |
 | Full screen | Hides the dock and menu bar like macOS. Click the top-left corner, right-click or scroll up on the top row, or press Ctrl+Shift+Up to show the menu bar and the window buttons (close, minimize, exit full screen). |
@@ -84,11 +84,12 @@ bar. Turn animations off in **Settings → Dock** if your server is slow.
 | **Brocreate** | Paint pictures with solid colours and text characters: pen, line, box (outline or filled), fill, text, colour picker and eraser, with undo/redo. Left and right click paint with two colours; switch the ink between **Solid** and **Char** (any of the 256 characters). Saves `.bimg` (or colour-only `.nfp`) to `/home/Pictures`. Use **File > Set as Wallpaper**, or right-click a picture in Finder and choose **Set as Wallpaper**. |
 | **Print** | Print text files on an attached printer, with a page preview, page titles, copies, and ink and paper levels. Right-click a `.txt` file in Finder and choose **Print**, or use Print in Notes. |
 | **Network** | Finds nearby BlockOS computers over a wireless or ender modem and, with a GPS cluster in range, shows them on a map with distance and direction. Turn off *Let other computers find this one* (also in **Settings → Network**) to stay hidden. |
-| **bTunes** | Music player for speakers: search YouTube or paste a YouTube video or playlist link, play DFPWM links and `.dfpwm` files, and keep a library with shuffle, repeat and a visualizer. |
-| **Settings** | General, Appearance (theme, accent, wallpaper incl. dark ones and a solid colour, white and black included), Dock (size, style, animations), Lock Screen, Users & Login, Notifications, Network, Login Items, Software Update. |
+| **bTunes** | Music player for speakers: search YouTube or paste a YouTube video or playlist link, play DFPWM links and `.dfpwm` files, and keep a library with shuffle and repeat. The **Visual** tab shows a live spectrum in sync with the speaker: **Bars** with falling peaks, **Mirror**, or a **Wave** oscilloscope (click it to switch). |
+| **Settings** | General, Storage (a usage bar split into System, Apps, Home, Data and Other, and every app by size, with Uninstall), Appearance (theme, accent, menu bar style, wallpaper incl. dark ones and a solid colour, white and black included), Dock (size, style, animations), Lock Screen, Users & Login, Notifications, Network, Login Items, Software Update. |
+| **Calculator** | A four-function calculator with keyboard support. |
 | **Clock** | Large clock (real or Minecraft time), alarms, stopwatch and timer. |
 | **Reminders** | Lists, smart lists (Today, Scheduled, All, Completed) and due times like `in 10m`, `14:30` or `tomorrow 9:00`. |
-| **Turtles** | Pair with turtles running the agent; view inventory, fuel and position, drive them, and run programs remotely. |
+| **Turtles** | Pair with turtles running the agent; view inventory, fuel and position, drive them, and run programs remotely. The **Scripts** tab keeps Lua scripts in `/home/Turtles` (tunnel, stairs and floor examples included): write them in Editor, then run them on the selected turtle with arguments. |
 | **DiskCopy** | Duplicate, back up, restore, erase and label floppy disks, or make a BlockOS installer disk. |
 | **Devices** | Inspect this computer and every attached peripheral; toggle redstone outputs. |
 | **Recorder** | Record the screen to `.rec` files, play them back, and export a standalone player. |
@@ -106,7 +107,8 @@ same API, go to **bTunes → Add → Server**.
   program is stored as its own app in Applications and shows up in Launchpad.
   Choose whether it opens in a window or full screen.
 * **App Store → Discover**: apps from catalogs. The default catalog is
-  [`store/catalog.cfg`](store/catalog.cfg); add more under *Sources*.
+  [`store/catalog.cfg`](store/catalog.cfg) (games such as Snake, Breakout and
+  SameGame, and more); add more under *Sources*.
 * **Terminal**: `bpm pastebin <code> [name]`, `bpm url <url> [name]`,
   `bpm search`, `bpm get <id>`, `bpm list`, `bpm remove <id>`.
 

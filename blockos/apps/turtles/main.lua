@@ -1,5 +1,6 @@
 -- Turtles: discover, pair with and remote-control turtles running the BlockOS agent.
 -- On a turtle it can also drive the local turtle directly.
+-- Scripts in /home/Turtles can be sent to a turtle and run there.
 
 local Ui = BlockOS.Require("ui")
 local Gfx = BlockOS.Require("gfx")
@@ -7,13 +8,99 @@ local Config = BlockOS.Require("config")
 
 local Protocol = "blockos_turtle"
 local DataPath = "/blockos/data/turtles.dat"
+local ScriptDir = "/home/Turtles"
 
 local Page = Ui.Page.new()
 local Known = Config.Read(DataPath) or {}
 local Selected = nil
 local Message = ""
 local Seq = 0
+local View = "control"
+local ScriptName = nil
 local Build
+
+-- Written to ScriptDir the first time it is opened, as starting points.
+local Examples = {
+	["tunnel.lua"] = [[
+-- Digs a tunnel 2 high. Args: length (default 10)
+local Length = tonumber(...) or 10
+
+local function Forward()
+	while (not turtle.forward()) do
+		if (not turtle.dig()) then turtle.attack() end
+	end
+end
+
+for Step = 1, Length do
+	Forward()
+	while (turtle.detectUp()) do turtle.digUp() end
+end
+print("Tunnel done: " .. Length .. " blocks")
+]],
+	["stairs.lua"] = [[
+-- Digs a staircase going down. Args: depth (default 8)
+local Depth = tonumber(...) or 8
+
+for Step = 1, Depth do
+	while (turtle.detect()) do turtle.dig() end
+	turtle.forward()
+	turtle.digUp()
+	turtle.digDown()
+	if (not turtle.down()) then
+		print("Blocked at step " .. Step)
+		return
+	end
+end
+print("Stairs done: " .. Depth .. " steps")
+]],
+	["floor.lua"] = [[
+-- Places a floor below the turtle from its inventory. Args: width length (default 5 5)
+local Args = { ... }
+local Width = tonumber(Args[1]) or 5
+local Length = tonumber(Args[2]) or 5
+
+local function PlaceDown()
+	if (turtle.detectDown()) then return true end
+	for Slot = 1, 16 do
+		if (turtle.getItemCount(Slot) > 0) then
+			turtle.select(Slot)
+			if (turtle.placeDown()) then return true end
+		end
+	end
+	return false
+end
+
+local function Forward()
+	while (not turtle.forward()) do
+		if (not turtle.dig()) then turtle.attack() end
+	end
+end
+
+for Row = 1, Width do
+	for Step = 1, Length do
+		if (not PlaceDown()) then
+			print("Out of blocks")
+			return
+		end
+		if (Step < Length) then Forward() end
+	end
+	if (Row < Width) then
+		local Turn = (Row % 2 == 1) and turtle.turnRight or turtle.turnLeft
+		Turn()
+		Forward()
+		Turn()
+	end
+end
+print("Floor done")
+]]
+}
+
+local NewScript = [[
+-- Describe what this script does here. Args: none
+local Args = { ... }
+
+turtle.forward()
+]]
 
 local KeyActions = {
 	[keys.w] = "forward", [keys.s] = "back", [keys.a] = "turnLeft", [keys.d] = "turnRight",
@@ -81,6 +168,11 @@ local function LocalRequest(Cmd, Args)
 		local Program = table.remove(Words, 1)
 		Reply.Ok = BlockOS.Launch(Program or "", Words, { Hold = true }) ~= nil
 		if (not Reply.Ok) then Reply.Error = "Program not found" end
+	elseif (Cmd == "script") then
+		local Words = {}
+		for Word in tostring(Args.Args or ""):gmatch("%S+") do table.insert(Words, Word) end
+		Reply.Ok = BlockOS.Launch("/" .. fs.combine(ScriptDir, Args.Name), Words, { Hold = true }) ~= nil
+		if (not Reply.Ok) then Reply.Error = "Script not found" end
 	elseif (Cmd == "locate") then
 		local X, Y, Z = gps.locate(1)
 		Reply.Ok = X ~= nil
@@ -129,8 +221,12 @@ local function Send(Cmd, Args)
 	local Reply, Err = Request(Selected, Cmd, Args)
 	if (not Reply) then
 		Message = Err
+	elseif (Cmd == "script" and Reply.Error == "Unknown command") then
+		Message = "Update the agent: reinstall BlockOS on the turtle"
 	elseif (not Reply.Ok) then
 		Message = tostring(Reply.Error or "Failed")
+	elseif (Cmd == "script") then
+		Message = "Running " .. Args.Name
 	else
 		Message = (Cmd == "action" and Args.Name or Cmd) .. ": ok"
 	end
@@ -253,6 +349,106 @@ local function BuildControls(X, Y, W, H)
 	end
 end
 
+-- Absolute, so the Editor does not resolve it against its own working directory.
+local function ScriptPath(Name)
+	return "/" .. fs.combine(ScriptDir, Name)
+end
+
+local function ListScripts()
+	if (not fs.exists(ScriptDir)) then
+		for Name, Source in pairs(Examples) do
+			Config.WriteText(ScriptPath(Name), Source)
+		end
+	end
+	local Names = {}
+	for _, Name in ipairs(fs.list(ScriptDir)) do
+		if (not fs.isDir(ScriptPath(Name))) then table.insert(Names, Name) end
+	end
+	table.sort(Names)
+	return Names
+end
+
+-- The first comment line of a script, shown as its description.
+local function Describe(Name)
+	local Source = Name and Config.ReadText(ScriptPath(Name))
+	local First = Source and Source:match("^%-%-+%s*([^\n]*)")
+	return First or ""
+end
+
+local function RunScript(Name, ScriptArgs)
+	local Source = Config.ReadText(ScriptPath(Name))
+	if (not Source) then
+		Message = "Cannot read " .. Name
+		return
+	end
+	Send("script", { Name = Name, Source = Source, Args = ScriptArgs })
+end
+
+local function BuildScripts(X, Y, W, H)
+	local Names = ListScripts()
+	if (not ScriptName or not fs.exists(ScriptPath(ScriptName))) then ScriptName = Names[1] end
+	local Items = {}
+	local Index = 0
+	for _, Name in ipairs(Names) do
+		table.insert(Items, { Text = Name, Icon = "\16", IconFg = "Accent", Right = Gfx.FormatSize(fs.getSize(ScriptPath(Name))), Name = Name })
+		if (Name == ScriptName) then Index = #Items end
+	end
+	local List = Page:Add(Ui.List.new({ X = X, Y = Y, W = W, H = math.max(1, H - 3), Items = Items, Bg = "Panel" }))
+	List.Selected = Index
+	List:EnsureVisible()
+	local ArgsField
+	List.OnSelect = function(_, _, Item)
+		ScriptName = Item.Name
+	end
+	List.OnActivate = function(_, _, Item)
+		RunScript(Item.Name, ArgsField.Value)
+	end
+	List.OnContext = function(_, _, Item, MX, MY)
+		if (not Item) then return end
+		local Choice = Ui.ContextMenu(MX, MY, { "Run", "Edit", "Rename", "Delete" })
+		if (Choice == 1) then
+			RunScript(Item.Name, ArgsField.Value)
+		elseif (Choice == 2) then
+			BlockOS.Launch("editor", { ScriptPath(Item.Name) })
+		elseif (Choice == 3) then
+			local Name = Ui.Prompt("Rename Script", "New name:", Item.Name)
+			if (Name and #Name > 0 and not fs.exists(ScriptPath(Name))) then
+				fs.move(ScriptPath(Item.Name), ScriptPath(Name))
+				ScriptName = Name
+				Build()
+			end
+		elseif (Choice == 4 and Ui.Confirm("Delete Script", "Delete " .. Item.Name .. "?", "Delete")) then
+			fs.delete(ScriptPath(Item.Name))
+			Build()
+		end
+	end
+	Page:Add(Ui.Label.new({ X = X, Y = Y + H - 3, W = W, Fg = "SubText", Text = function() return Describe(ScriptName) end }))
+	Page:Add(Ui.Label.new({ X = X, Y = Y + H - 2, Text = "Args" }))
+	ArgsField = Page:Add(Ui.Input.new({ X = X + 5, Y = Y + H - 2, W = W - 5, Placeholder = "e.g. 10" }))
+	ArgsField.OnSubmit = function(_, Value)
+		if (ScriptName) then RunScript(ScriptName, Value) end
+	end
+	local Bottom = Y + H - 1
+	Page:Add(Ui.Button.new({ X = X, Y = Bottom, Text = " Run ", Style = "primary", OnClick = function()
+		if (ScriptName) then RunScript(ScriptName, ArgsField.Value) end
+	end }))
+	Page:Add(Ui.Button.new({ X = X + 6, Y = Bottom, Text = " New ", OnClick = function()
+		local Name = Ui.Prompt("New Script", "Script name:", "")
+		if (not Name or #Name == 0) then return end
+		if (not Name:match("%.lua$")) then Name = Name .. ".lua" end
+		if (not fs.exists(ScriptPath(Name))) then Config.WriteText(ScriptPath(Name), NewScript) end
+		ScriptName = Name
+		BlockOS.Launch("editor", { ScriptPath(Name) })
+		Build()
+	end }))
+	Page:Add(Ui.Button.new({ X = X + 12, Y = Bottom, Text = " Edit ", OnClick = function()
+		if (ScriptName) then BlockOS.Launch("editor", { ScriptPath(ScriptName) }) end
+	end }))
+	if (X + 25 <= X + W) then
+		Page:Add(Ui.Button.new({ X = X + 19, Y = Bottom, Text = " Stop ", Style = "danger", OnClick = function() Send("stop") end }))
+	end
+end
+
 function Build()
 	Page:Clear()
 	local W, H = Page.W, Page.H
@@ -306,13 +502,24 @@ function Build()
 			end
 		end }))
 	end
-	local TopY = (SideW == 0) and 3 or 1
+	local TopY = (SideW == 0) and 2 or 1
 	if (Selected and Known[Selected]) then
-		BuildControls(MainX, TopY, MainW, H - TopY - 1)
+		Page:Add(Ui.Tabs.new({
+			X = MainX, Y = TopY, W = MainW, Items = { "Control", "Scripts" }, Selected = (View == "scripts") and 2 or 1,
+			OnChange = function(_, Index)
+				View = (Index == 2) and "scripts" or "control"
+				Build()
+			end
+		}))
+		if (View == "scripts") then
+			BuildScripts(MainX, TopY + 1, MainW, H - TopY - 2)
+		else
+			BuildControls(MainX, TopY + 1, MainW, H - TopY - 2)
+		end
 	else
 		Page:Add(Ui.Label.new({
-			X = MainX, Y = TopY + 1, W = MainW, H = 6, Fg = "SubText",
-			Text = "Select a turtle, or press Scan.\n\nOn each turtle, install BlockOS and choose \"Turtle Agent\". Turtles show a PIN for pairing.\n\nKeys: WASD move, R/F up/down, Q dig, E place, X attack."
+			X = MainX, Y = TopY + 1, W = MainW, H = math.max(6, H - TopY - 2), Fg = "SubText",
+			Text = "Select a turtle, or press Scan.\n\nOn each turtle, install BlockOS and choose \"Turtle Agent\". Turtles show a PIN for pairing.\n\nKeys: WASD move, R/F up/down, Q dig, E place, X attack. Scripts runs Lua files from /home/Turtles."
 		}))
 	end
 	Page:Add(Ui.Label.new({ X = 1, Y = H, W = W, Bg = "Panel", Fg = "SubText", Text = function() return " " .. Message end }))
@@ -324,7 +531,7 @@ function Page:OnLayout()
 end
 
 function Page:OnEvent(Name, A, B, C)
-	if (Name == "key" and Selected and KeyActions[A]) then
+	if (Name == "key" and Selected and View == "control" and KeyActions[A]) then
 		Send("action", { Name = KeyActions[A] })
 		return true
 	elseif (Name == "rednet_message" and C == Protocol and type(B) == "table" and B.Event == "job_done") then
