@@ -3,6 +3,9 @@
 local Ui = BlockOS.Require("ui")
 local Gfx = BlockOS.Require("gfx")
 local Apps = BlockOS.Require("apps")
+local Config = BlockOS.Require("config")
+local Image = BlockOS.Require("image")
+local Wallpaper = BlockOS.Require("wallpaper")
 
 local Args = { ... }
 
@@ -22,6 +25,7 @@ local Kinds = {
 	dfpwm = { Icon = "\14", Fg = colors.red, Name = "DFPWM audio" },
 	rec = { Icon = "\7", Fg = colors.red, Name = "Recording" },
 	nfp = { Icon = "\127", Fg = colors.pink, Name = "Paint image" },
+	bimg = { Icon = "\127", Fg = colors.magenta, Name = "Brocreate picture" },
 	json = { Icon = "\7", Fg = colors.orange, Name = "JSON" },
 	cfg = { Icon = "\7", Fg = colors.orange, Name = "Config" }
 }
@@ -68,6 +72,7 @@ local function SidebarItems()
 		{ Text = "Downloads", Path = "/home/Downloads", Icon = "\25", IconFg = colors.lightBlue },
 		{ Text = "Music", Path = "/home/Music", Icon = "\14", IconFg = colors.lightBlue },
 		{ Text = "Recordings", Path = "/home/Recordings", Icon = "\7", IconFg = colors.red },
+		{ Text = "Pictures", Path = "/home/Pictures", Icon = "\127", IconFg = colors.magenta },
 		{ Text = "Locations", Header = true },
 		{ Text = "Apps", Path = AppsPath, Icon = "\4", IconFg = colors.purple },
 		{ Text = "Computer", Path = "/", Icon = "\8", IconFg = colors.gray }
@@ -219,6 +224,18 @@ local function GetInfo(Item)
 	Ui.Alert(fs.getName(Path), table.concat(Lines, "\n"))
 end
 
+local function SetWallpaper(Path)
+	if (not Image.Load(Path)) then
+		Ui.Alert("Set as Wallpaper", fs.getName(Path) .. " is not a picture BlockOS can read.")
+		return
+	end
+	local Settings = Config.Settings()
+	Settings.Wallpaper = Wallpaper.Picture.ID
+	Settings.WallpaperImage = "/" .. fs.combine(Path, "")
+	Wallpaper.Invalidate()
+	Config.Save("settings")
+end
+
 local function AppMenu(Item, X, Y)
 	local App = Item.App
 	local Pinned = Apps.IsPinned(App.ID)
@@ -235,7 +252,6 @@ local function AppMenu(Item, X, Y)
 	elseif (Choice == "Keep in Dock" or Choice == "Remove from Dock") then
 		Apps.SetPinned(App.ID, not Pinned)
 	elseif (Choice == "Add to Login Items") then
-		local Config = BlockOS.Require("config")
 		local Settings = Config.Settings()
 		table.insert(Settings.StartupApps, App.ID)
 		Config.Save("settings")
@@ -299,6 +315,9 @@ local function FileMenu(Item, X, Y)
 	if (not Item.IsDir and Printable[Extension]) then
 		table.insert(Options, 4, { Text = "Print" })
 	end
+	if (not Item.IsDir and Image.IsImage(Item.Path)) then
+		table.insert(Options, 4, { Text = "Set as Wallpaper" })
+	end
 	local Index = Ui.ContextMenu(X, Y, Options)
 	local Choice = Index and Options[Index].Text
 	if (Choice == "Open") then
@@ -309,6 +328,8 @@ local function FileMenu(Item, X, Y)
 		BlockOS.Launch(Item.Path, {}, { Hold = true })
 	elseif (Choice == "Print") then
 		BlockOS.Launch("print", { Item.Path })
+	elseif (Choice == "Set as Wallpaper") then
+		SetWallpaper(Item.Path)
 	elseif (Choice == "Rename") then
 		local Name = Ui.Prompt("Rename", "New name:", fs.getName(Item.Path))
 		if (Name and #Name > 0 and Name ~= fs.getName(Item.Path)) then

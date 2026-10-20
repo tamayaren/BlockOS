@@ -1,4 +1,6 @@
--- Procedural ASCII wallpapers rendered to blit rows.
+-- Procedural ASCII wallpapers rendered to blit rows, or a picture saved from Brocreate.
+
+local Image = BlockOS.Require("image")
 
 local Wallpaper = {}
 
@@ -17,6 +19,12 @@ Wallpaper.List = {
 
 -- Wallpapers that use the chosen colour.
 Wallpaper.Coloured = { grid = true, solid = true }
+
+-- Extra Settings entry, offered once Settings.WallpaperImage is set.
+Wallpaper.Picture = { ID = "picture", Name = "Picture" }
+
+-- Bumped when a picture file changes so cached renders are redrawn.
+Wallpaper.Revision = 0
 
 local Hex = {}
 for Index = 0, 15 do
@@ -285,19 +293,30 @@ function Renderers.solid(W, H, Color)
 	return Finish(NewCanvas(W, H, Color))
 end
 
+-- Stretches the picture to fill the screen; falls back to the solid colour if it cannot be read.
+function Renderers.picture(W, H, Color, ImagePath)
+	local Img = Image.Load(ImagePath)
+	if (not Img) then return Renderers.solid(W, H, Color) end
+	return Image.Scale(Img, W, H)
+end
+
+function Wallpaper.Invalidate()
+	Wallpaper.Revision = Wallpaper.Revision + 1
+end
+
 local CacheKey, CacheRows
 
-function Wallpaper.Render(Name, W, H, Color)
-	local Key = table.concat({ tostring(Name), W, H, tostring(Color) }, ":")
+function Wallpaper.Render(Name, W, H, Color, ImagePath)
+	local Key = table.concat({ tostring(Name), W, H, tostring(Color), tostring(ImagePath), Wallpaper.Revision }, ":")
 	if (Key == CacheKey) then return CacheRows end
 	local Renderer = Renderers[Name] or Renderers.overworld
-	CacheRows = Renderer(W, H, Color or colors.cyan)
+	CacheRows = Renderer(W, H, Color or colors.cyan, ImagePath)
 	CacheKey = Key
 	return CacheRows
 end
 
-function Wallpaper.Draw(T, X, Y, W, H, Name, Color)
-	local Rows = Renderers[Name] and Renderers[Name](W, H, Color or colors.cyan) or Renderers.overworld(W, H)
+function Wallpaper.Draw(T, X, Y, W, H, Name, Color, ImagePath)
+	local Rows = Renderers[Name] and Renderers[Name](W, H, Color or colors.cyan, ImagePath) or Renderers.overworld(W, H)
 	for Row = 1, H do
 		T.setCursorPos(X, Y + Row - 1)
 		T.blit(Rows[Row][1], Rows[Row][2], Rows[Row][3])

@@ -90,7 +90,7 @@ function Users.Verify(Name, Password)
 end
 
 function Users.EnsureHome()
-	for _, Folder in ipairs({ "", "Documents", "Desktop", "Music", "Recordings", "Downloads" }) do
+	for _, Folder in ipairs({ "", "Documents", "Desktop", "Music", "Recordings", "Pictures", "Downloads" }) do
 		local Path = fs.combine(Users.Home, Folder)
 		if (not fs.exists(Path)) then
 			fs.makeDir(Path)

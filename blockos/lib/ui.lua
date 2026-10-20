@@ -942,6 +942,68 @@ function Ui.Choose(Title, Items, Selected)
 	return Index, Index and Items[Index]
 end
 
+-- Character map of all 256 font characters. Type a key, click or use the arrows; returns the byte or nil.
+function Ui.PickChar(Title, Selected)
+	local Parent = (Ui.Current and Ui.Current.Parent) or term.current()
+	local Modal = CreateModal(34, 13, Parent)
+	DrawModalTitle(Modal, Title or "Characters")
+	local Current = Selected or 65
+	local LastClick = 0
+	local function Finish()
+		Modal.Result = Current
+		Modal.Running = false
+	end
+	Modal:Add(Ui.Canvas.new({
+		X = 2, Y = 3, W = 32, H = 8,
+		OnDraw = function(Self, T, Th)
+			for Row = 0, 7 do
+				local Chars = {}
+				for Column = 0, 31 do
+					Chars[Column + 1] = string.char(Row * 32 + Column)
+				end
+				Gfx.Write(T, Self.X, Self.Y + Row, table.concat(Chars), Th.InputFg, Th.InputBg)
+			end
+			Gfx.Write(T, Self.X + Current % 32, Self.Y + math.floor(Current / 32), string.char(Current), Th.AccentFg, Th.Accent)
+		end,
+		OnEvent = function(Self, Name, _, X, Y)
+			if (Name ~= "mouse_click" and Name ~= "mouse_drag") then return false end
+			local Code = (Y - Self.Y) * 32 + (X - Self.X)
+			if (Name == "mouse_click" and Code == Current and os.clock() - LastClick < .5) then
+				Finish()
+			end
+			Current = math.max(0, math.min(255, Code))
+			LastClick = os.clock()
+			return true
+		end
+	}))
+	Modal:Add(Ui.Label.new({
+		X = 2, Y = 11, W = 32, Fg = "SubText",
+		Text = function()
+			return "Character " .. Current .. "  " .. string.char(Current)
+		end
+	}))
+	Modal:Add(Ui.Button.new({
+		X = 34 - 17, Y = 12, W = 8, Text = "Cancel",
+		OnClick = function()
+			Modal.Running = false
+		end
+	}))
+	Modal:Add(Ui.Button.new({ X = 34 - 8, Y = 12, W = 8, Text = "Choose", Style = "primary", OnClick = Finish }))
+	function Modal:OnEvent(Name, A)
+		if (Name == "char") then
+			Current = A:byte()
+		elseif (Name == "key") then
+			local Steps = { [keys.left] = -1, [keys.right] = 1, [keys.up] = -32, [keys.down] = 32 }
+			if (Steps[A]) then
+				Current = math.max(0, math.min(255, Current + Steps[A]))
+			elseif (A == keys.enter or A == keys.numPadEnter) then
+				Finish()
+			end
+		end
+	end
+	return RunModal(Modal)
+end
+
 -- Pops up a menu at X, Y (in parent coordinates). Items may be strings, "-" separators,
 -- or { Text = ..., Disabled = true }. Returns the chosen index or nil.
 function Ui.ContextMenu(X, Y, Items)
