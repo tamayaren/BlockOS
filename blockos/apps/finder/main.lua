@@ -169,6 +169,7 @@ local function Paste(Dir)
 	local Ok, Err = pcall(function()
 		if (Clip.Cut) then
 			fs.move(Clip.Path, Target)
+			Apps.MoveShortcuts(Clip.Path, Target)
 		else
 			fs.copy(Clip.Path, Target)
 		end
@@ -198,7 +199,11 @@ local function DeleteItem(Item)
 	if (not Item or not Item.Path or fs.isReadOnly(Item.Path)) then return end
 	if (Ui.Confirm("Delete", "Delete \"" .. fs.getName(Item.Path) .. "\"? This cannot be undone.", "Delete")) then
 		local Ok, Err = pcall(fs.delete, Item.Path)
-		if (not Ok) then Ui.Alert("Delete failed", tostring(Err)) end
+		if (Ok) then
+			Apps.MoveShortcuts(Item.Path, nil)
+		else
+			Ui.Alert("Delete failed", tostring(Err))
+		end
 		Refresh()
 	end
 end
@@ -239,7 +244,8 @@ end
 local function AppMenu(Item, X, Y)
 	local App = Item.App
 	local Pinned = Apps.IsPinned(App.ID)
-	local Options = { "Open", "Open Full Screen", "-", Pinned and "Remove from Dock" or "Keep in Dock", "Add to Login Items", "Get Info" }
+	local OnDesktop = Apps.HasShortcut(Apps.AppShortcut(App.ID))
+	local Options = { "Open", "Open Full Screen", "-", Pinned and "Remove from Dock" or "Keep in Dock", OnDesktop and "Remove from Desktop" or "Add to Desktop", "Add to Login Items", "Get Info" }
 	if (not App.System) then
 		table.insert(Options, "-")
 		table.insert(Options, "Uninstall")
@@ -251,6 +257,8 @@ local function AppMenu(Item, X, Y)
 		BlockOS.Launch(App.ID, {}, { Mode = "fullscreen" })
 	elseif (Choice == "Keep in Dock" or Choice == "Remove from Dock") then
 		Apps.SetPinned(App.ID, not Pinned)
+	elseif (Choice == "Add to Desktop" or Choice == "Remove from Desktop") then
+		Apps.SetShortcut(Apps.AppShortcut(App.ID), not OnDesktop)
 	elseif (Choice == "Add to Login Items") then
 		local Settings = Config.Settings()
 		table.insert(Settings.StartupApps, App.ID)
@@ -297,6 +305,7 @@ local function FileMenu(Item, X, Y)
 		return
 	end
 	local Locked = fs.isReadOnly(Item.Path)
+	local OnDesktop = Apps.HasShortcut(Item.Path)
 	local Options = {
 		{ Text = "Open" },
 		{ Text = "Edit", Disabled = Item.IsDir },
@@ -308,6 +317,7 @@ local function FileMenu(Item, X, Y)
 		{ Text = "Cut", Disabled = Locked },
 		{ Text = "Paste", Disabled = ReadOnly or not HasClip },
 		"-",
+		{ Text = OnDesktop and "Remove from Desktop" or "Add to Desktop" },
 		{ Text = "Get Info" },
 		{ Text = "Delete", Disabled = Locked }
 	}
@@ -330,6 +340,8 @@ local function FileMenu(Item, X, Y)
 		BlockOS.Launch("print", { Item.Path })
 	elseif (Choice == "Set as Wallpaper") then
 		SetWallpaper(Item.Path)
+	elseif (Choice == "Add to Desktop" or Choice == "Remove from Desktop") then
+		Apps.SetShortcut(Item.Path, not OnDesktop)
 	elseif (Choice == "Rename") then
 		local Name = Ui.Prompt("Rename", "New name:", fs.getName(Item.Path))
 		if (Name and #Name > 0 and Name ~= fs.getName(Item.Path)) then
@@ -338,6 +350,7 @@ local function FileMenu(Item, X, Y)
 				Ui.Alert("Rename", "An item with that name already exists.")
 			else
 				fs.move(Item.Path, Target)
+				Apps.MoveShortcuts(Item.Path, Target)
 			end
 		end
 		Refresh()
