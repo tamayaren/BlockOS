@@ -29,6 +29,7 @@ Config.Defaults = {
 		AutoLogin = false,
 		IdleLock = 0,
 		StartupApps = {},
+		Shortcuts = {},
 		Repositories = { Config.Repo .. "store/catalog.cfg" }
 	}
 }

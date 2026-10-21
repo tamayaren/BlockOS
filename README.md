@@ -42,12 +42,12 @@ turtle over rednet (basic turtles get the agent automatically).
 
 | Area | What it does |
 | --- | --- |
-| Menu bar | Block logo menu (About, Settings, App Store, Force Quit, Lock, Log Out, Restart, Shut Down), the app's name, **Go** and **Window** menus, an update arrow when one is available, and the clock. Solid, clear (the wallpaper shows through) or blur (the wallpaper's colours smoothed into soft blocks) in **Settings → Appearance**. |
-| Dock | Pinned apps, running apps (dot underneath) and a Messages unread badge. Right-click an icon to open, quit, or keep it in the dock. Small (2 rows, the default) or large, solid or clear (no background, just the icons and running dots) in **Settings → Dock**. |
+| Menu bar | Block logo menu (About, Settings, App Store, Force Quit, Lock, Log Out, Restart, Shut Down), the app's name, **Go** and **Window** menus, an update arrow when one is available, the clock, and a Show Desktop sliver in the top-right corner that hides every window (click it again to bring them back). Solid, clear (the wallpaper shows through) or blur (the wallpaper's colours smoothed into soft blocks) in **Settings → Appearance**. |
+| Dock | Pinned apps, running apps (dot underneath) and a Messages unread badge. Right-click an icon to open, quit, keep it in the dock or add it to the desktop. Small (2 rows, the default) or large, solid or clear (no background, just the icons and running dots) in **Settings → Dock**. |
 | Windows | Drag the title bar to move, drag the bottom-right corner to resize. Red closes, yellow minimizes, green goes full screen. |
 | Full screen | Hides the dock and menu bar like macOS. Click the top-left corner, right-click or scroll up on the top row, or press Ctrl+Shift+Up to show the menu bar and the window buttons (close, minimize, exit full screen). |
-| Launchpad | Every app in a searchable grid. Type to search, scroll for more pages. |
-| Desktop | Right-click for New Terminal, Finder, Change Wallpaper, Settings. |
+| Launchpad | Every app in a searchable grid. Type to search, scroll for more pages. Right-click an app to open it full screen, keep it in the dock or add it to the desktop. |
+| Desktop | Right-click for New Terminal, Finder, Change Wallpaper, Settings. Shortcuts to apps, files and folders line up down the left: click to select, double-click to open, right-click to open, edit, show in Finder, remove the shortcut or delete the file. |
 | Lock screen | Date and a large clock over an animated screensaver, your name and a password field. The button in the bottom-right corner restarts or shuts down. Pick the screensaver colours in **Settings → Lock Screen** (your accent colour by default). |
 
 ### Animations
@@ -69,15 +69,16 @@ bar. Turn animations off in **Settings → Dock** if your server is slow.
 | Ctrl+Shift+M | Minimize |
 | Ctrl+Shift+W / Q | Close window / quit app |
 | Ctrl+Shift+Up | Reveal menu bar in full screen |
+| Ctrl+Shift+D | Show Desktop |
 | Ctrl+Shift+L | Lock |
 
 ## Bundled apps
 
 | App | Description |
 | --- | --- |
-| **Finder** | File manager with a sidebar (favourites, Applications, disks), list view, context menus, copy/cut/paste, rename, Get Info and Open in Terminal. |
+| **Finder** | File manager with a sidebar (favourites, Applications, disks), list view, context menus, copy/cut/paste, rename, Get Info and Open in Terminal. Right-click any file, folder or app and choose **Add to Desktop** for a desktop shortcut. |
 | **Terminal** | A CraftOS shell in a window. Includes `bpm` (package manager) and `open`. |
-| **Editor** | Code editor with Lua syntax highlighting, selection, undo/redo, find/replace, go to line, and Run (F5). |
+| **Editor** | Code editor with Lua syntax highlighting, selection, undo/redo, find/replace, go to line, and Run (F5). **File > Add to Desktop** puts the open script on the desktop. |
 | **App Store** | Browse catalogs, install apps from Pastebin or any URL, and manage installed apps. |
 | **Messages** | Encrypted chat rooms and direct messages between BlockOS computers over rednet (needs a modem). |
 | **Notes** | Quick notes with word wrap, bullet lists and autosave, stored in `/home/Notes`. Opens `.txt` files from Finder. |
