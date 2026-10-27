@@ -99,7 +99,7 @@ function Setup.Run(Opts)
 
 	local function Footer(NextText, OnNext)
 		local W, H = Page.W, Page.H
-		if (StepIndex > 1) then
+		if (StepIndex > 1 and not State.Finished) then
 			Page:Add(Ui.Button.new({ X = 2, Y = H - 1, Text = " Back ", OnClick = function() Go(-1) end }))
 		end
 		Page:Add(Ui.Button.new({ X = W - #NextText - 3, Y = H - 1, Text = " " .. NextText .. " ", Style = "primary", OnClick = OnNext or function() Go(1) end }))

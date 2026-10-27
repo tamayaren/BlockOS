@@ -70,6 +70,10 @@ function Service.Run(Ctx)
 			-- From the console or bcloud: A is "check" or "install".
 			Service.Check(A == "install")
 			os.queueEvent("blockcloud_status")
+			if (Service.Pending and Settings.AutoRestart) then
+				os.cancelTimer(Timer)
+				Timer = os.startTimer(10)
+			end
 		elseif (Event == "timer" and A == Timer) then
 			if (Service.Pending and Settings.AutoRestart) then
 				if (not Busy(Ctx)) then
