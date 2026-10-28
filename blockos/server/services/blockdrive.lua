@@ -279,8 +279,9 @@ function Ops.upload_begin(Ctx, Args)
 	if (fs.isDir(Local)) then Fail("is_dir") end
 	if (fs.exists(Local) and not Args.Overwrite) then Fail("exists") end
 	if (MaxFile() and Size > MaxFile()) then Fail("too_large", "Files on this server can be at most " .. math.floor(MaxFile() / 1024) .. " KB.") end
+	-- The quota counts the net change, but the disk must hold the staged copy beside the old file.
 	local Replacing = fs.exists(Local) and fs.getSize(Local) or 0
-	if (Size - Replacing > Available()) then Fail("no_space") end
+	if (Size - Replacing > Available() or Size > FreeSpace()) then Fail("no_space") end
 	local Item = NewTransfer(Ctx, "up")
 	Item.Path, Item.Local, Item.Size, Item.Sum, Item.Overwrite = Normal, Local, Size, Sum, Args.Overwrite and true or false
 	Item.Temp = fs.combine(TempDir(), Item.ID)
@@ -305,8 +306,12 @@ function Ops.upload_chunk(Ctx, Args)
 	if (Item.Received + #Data > Item.Size) then Fail("invalid", "More data than announced.") end
 	local Handle = fs.open(Item.Temp, "ab")
 	if (not Handle) then Fail("internal", "Could not write the staging file.") end
-	Handle.write(Data)
-	Handle.close()
+	local Written = pcall(Handle.write, Data)
+	pcall(Handle.close)
+	if (not Written or fs.getSize(Item.Temp) ~= Item.Received + #Data) then
+		EndTransfer(Item)
+		Fail("no_space")
+	end
 	Item.Received = Item.Received + #Data
 	Item.Running = Codec.Adler32(Data, Item.Running)
 	Item.Next = Item.Next + 1

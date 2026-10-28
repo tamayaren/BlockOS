@@ -29,6 +29,11 @@ local function Admin()
 			rednet.send(Sender, { Ok = true }, "blockcloud-test/admin")
 			sleep(.5)
 			os.reboot()
+		elseif (Msg.Op == "set") then
+			local Server = BlockOS.Require("server/config")
+			Server.Settings()[Msg.Key] = Msg.Value
+			Server.Save()
+			Reply.Ok = true
 		elseif (Msg.Op == "update") then
 			os.queueEvent("blockcloud_update", "install")
 			Reply.Ok = true
