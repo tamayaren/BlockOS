@@ -97,7 +97,8 @@ def desktop(root, script):
         (root / "home" / folder).mkdir(parents=True, exist_ok=True)
 
 
-def run(name, computers, extra="", timeout=120):
+def run(name, computers, extra="", timeout=120, timed=False):
+    """timed: the scenario has no computer to wait for and simply runs for timeout seconds."""
     """computers: list of (id, label, setup function, options)."""
     base = OUT / name
     if base.exists():
@@ -135,7 +136,7 @@ def run(name, computers, extra="", timeout=120):
             print("  " + line)
         elif line.startswith("  |"):
             print("  " + line)
-    if result.returncode != 0:
+    if result.returncode != 0 and not timed:
         failed += 1
     log = base / "computer1" / "blockos" / "data" / "cloud" / "logs" / "server.log"
     if failed and log.exists():
@@ -350,6 +351,33 @@ def scenario_update():
     return failed
 
 
+def scenario_lock():
+    # A console with an admin password boots locked; a wrong password is refused.
+    def locked(root):
+        server(root, admin=False)
+        config = root / "blockos" / "data" / "cloud" / "server.dat"
+        import hashlib
+        digest = hashlib.sha256(b"blockcloud-admin|abcd|secret").hexdigest()
+        config.write_text(config.read_text().replace("Configured = true,", 'Configured = true, AdminSalt = "abcd", AdminHash = "%s",' % digest))
+    typed = lambda at, text: "\n".join("event 1 %.2f char %s" % (at + i * .05, c) for i, c in enumerate(text))
+    events = "\n".join([
+        "snap 1 3", typed(3.5, "wrong"), "event 1 4.2 key 257", "snap 1 5",
+        typed(5.5, "secret"), "event 1 6.2 key 257",
+    ])
+    failed = run("lock", [(1, "server", locked, {"screen"})], extra=events, timeout=9, timed=True)
+    screens = (OUT / "lock" / "harness.log").read_text()
+    checks = [
+        ("lock: boots locked", "All services running" in screens.split("at 5.")[0] and "Overview" not in screens.split("at 5.")[0]),
+        ("lock: wrong password refused", "Wrong password." in screens),
+        ("lock: right password unlocks", "Overview" in screens.split("at end")[-1]),
+        ("lock: message cleared after unlocking", "Wrong password." not in screens.split("at end")[-1]),
+    ]
+    for name, ok in checks:
+        print("  [screen] %s %s" % ("PASS" if ok else "FAIL", name))
+        failed += not ok
+    return failed
+
+
 SCENARIOS = {
     "unit": scenario_unit,
     "vertical": scenario_vertical,
@@ -357,6 +385,7 @@ SCENARIOS = {
     "console": scenario_console,
     "gui": scenario_gui,
     "setup": scenario_setup,
+    "lock": scenario_lock,
     "update": scenario_update,
     "install": scenario_install,
     "clientinstall": scenario_clientinstall,
