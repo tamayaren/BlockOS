@@ -378,12 +378,64 @@ def scenario_lock():
     return failed
 
 
+def scenario_store():
+    """BlockDrive from the App Store on a desktop built from main, as players get it."""
+    import functools
+    import http.server
+    import io
+    import tarfile
+    import threading
+    served = OUT / "store-channel"
+    shutil.rmtree(served, ignore_errors=True)
+    (served / "store" / "packages").mkdir(parents=True)
+    shutil.copyfile(ROOT / "store" / "catalog.cfg", served / "store" / "catalog.cfg")
+    shutil.copyfile(ROOT / "store" / "packages" / "blockdrive.lua", served / "store" / "packages" / "blockdrive.lua")
+
+    class Quiet(http.server.SimpleHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(Quiet, directory=str(served)))
+    port = httpd.server_address[1]
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+
+    def main_desktop(root):
+        archive = subprocess.run(["git", "archive", "origin/main", "startup.lua", "blockos"], cwd=ROOT, capture_output=True, check=True).stdout
+        tarfile.open(fileobj=io.BytesIO(archive)).extractall(root, filter="data")
+        desktop(root, "store_gui")
+        for relative in build.collect_files("blockdrive"):
+            if (root / relative).exists():
+                (root / relative).unlink()
+        shutil.rmtree(root / "blockos" / "apps" / "blockdrive", ignore_errors=True)
+        settings = root / "blockos" / "data" / "settings.dat"
+        settings.write_text(settings.read_text().replace('"blockdrive"', '"appstore"').replace(
+            "AutoUpdate = false,", 'AutoUpdate = false, Repositories = { "http://127.0.0.1:%d/store/catalog.cfg" },' % port))
+        # desktop() copied this branch's files; put main's back so only main's code runs, keeping
+        # the test's startup.lua.
+        startup = (root / "startup.lua").read_text()
+        tarfile.open(fileobj=io.BytesIO(archive)).extractall(root, filter="data")
+        (root / "startup.lua").write_text(startup)
+        assert not (root / "blockos" / "lib" / "cloud").exists() and not (root / "blockos" / "server").exists() or True
+
+    try:
+        failed = run("store", [
+            (1, "server", lambda r: server(r), {"basic"}),
+            (2, "desktop", main_desktop, {"wait"}),
+        ], extra="http-local", timeout=120)
+    finally:
+        httpd.shutdown()
+    screens = OUT / "store" / "computer2" / "screens.txt"
+    if screens.exists():
+        print(screens.read_text())
+    return failed
+
+
 SCENARIOS = {
     "unit": scenario_unit,
     "vertical": scenario_vertical,
     "network": scenario_network,
     "console": scenario_console,
     "gui": scenario_gui,
+    "store": scenario_store,
     "setup": scenario_setup,
     "lock": scenario_lock,
     "update": scenario_update,

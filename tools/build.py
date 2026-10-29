@@ -7,6 +7,7 @@ Writes, at the repository root:
   server-manifest.cfg     Server Edition update manifest
   blockdrive-install.lua  BlockDrive client installer for existing desktop computers
   blockdrive-manifest.cfg BlockDrive client update manifest
+  store/packages/blockdrive.lua  BlockDrive for the App Store (app + client library in one file)
 
 Run from anywhere: python tools/build.py
   --list <edition>  print an edition's files and exit (used by tests/run.py)
@@ -247,6 +248,24 @@ def build(edition):
     print(f"{edition} {version}: {len(files)} files, {spec['installer']} {size / 1024:.1f} KB")
 
 
+def build_store_package():
+    """The App Store installs one file per app, so BlockDrive's package bundles its library."""
+    version = read_text(EDITIONS["blockdrive"]["version"]).strip()
+    files = [f for f in collect_files("blockdrive") if f.endswith(".lua")]
+    bundle = "\n".join(
+        "Files[" + lua_quote(relative) + "] = " + long_string(read_text(relative))
+        for relative in files
+    )
+    template = read_text("src/blockdrive-package.lua")
+    package = template.replace('"@VERSION@"', lua_quote(version)).replace("--@FILES@", bundle)
+    (ROOT / "store" / "packages" / "blockdrive.lua").write_text(package, encoding="utf-8", newline="\n")
+    catalog = read_text("store/catalog.cfg")
+    entry = re.search(r'ID = "blockdrive",.*?Version = "([^"]+)"', catalog, re.S)
+    if not entry or entry.group(1) != version:
+        print(f"warning: store/catalog.cfg should list BlockDrive version {version}")
+    print(f"store package blockdrive {version}: store/packages/blockdrive.lua")
+
+
 def main():
     if len(sys.argv) == 3 and sys.argv[1] == "--list":
         print("\n".join(collect_files(sys.argv[2])))
@@ -255,6 +274,7 @@ def main():
         sys.exit(1)
     for edition in EDITIONS:
         build(edition)
+    build_store_package()
 
 
 if __name__ == "__main__":
