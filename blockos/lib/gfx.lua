@@ -11,6 +11,23 @@ function Gfx.ToBlit(Color)
 	return Gfx.Hex[Color] or "0"
 end
 
+-- Colours light enough to need black text on top of them.
+Gfx.Light = {
+	[colors.white] = true, [colors.lightGray] = true, [colors.yellow] = true, [colors.lime] = true,
+	[colors.lightBlue] = true, [colors.pink] = true, [colors.cyan] = true, [colors.orange] = true
+}
+
+-- Black or white, whichever reads better on Bg.
+function Gfx.Contrast(Bg)
+	return Gfx.Light[Bg] and colors.black or colors.white
+end
+
+-- Gfx.Contrast for a single blit character.
+function Gfx.ContrastBlit(Char)
+	local Index = tonumber(Char, 16)
+	return Gfx.ToBlit(Gfx.Contrast(Index and 2 ^ Index or colors.black))
+end
+
 function Gfx.Write(T, X, Y, Text, Fg, Bg)
 	Text = tostring(Text)
 	if (Fg) then T.setTextColor(Fg) end

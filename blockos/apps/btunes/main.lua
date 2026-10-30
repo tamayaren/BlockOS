@@ -11,6 +11,7 @@ local Args = { ... }
 local LibraryPath = "/blockos/data/music.dat"
 local ChunkSize = 16 * 1024
 local BytesPerSecond = 6000
+local SampleRate = 48000
 -- Community server that converts YouTube audio to DFPWM (the same one Minux and iPod use).
 local DefaultServer = "https://ipod-2to6magyna-uc.a.run.app/"
 local ApiVersion = "2.1"
@@ -40,9 +41,27 @@ local Player = {
 	Repeat = false,
 	Bytes = 0,
 	Total = 0,
-	Levels = {},
-	Tick = 0,
+	-- Decoded chunks with the clock times the speakers play them, newest last.
+	Timeline = {},
+	AudioEnd = nil,
 	Error = nil
+}
+
+local Visual = {
+	Modes = { "Bars", "Mirror", "Wave" },
+	Window = 1024,
+	Count = 0,
+	Wanted = 16,
+	-- FFT tables, built once.
+	Hann = {},
+	Reverse = {},
+	Cos = {},
+	Sin = {},
+	-- First FFT bin of each band; band N ends where band N + 1 starts.
+	Edges = {},
+	Bands = {},
+	Peaks = {},
+	Wave = nil
 }
 
 local function Speakers()
@@ -100,6 +119,8 @@ local function Stop()
 	Player.Buffer = nil
 	Player.Pending = nil
 	Player.RequestUrl = nil
+	Player.Timeline = {}
+	Player.AudioEnd = nil
 	CloseHandle()
 	for _, Speaker in ipairs(Speakers()) do
 		pcall(Speaker.Device.stop)
@@ -127,20 +148,14 @@ local function TrackEnded()
 	Play(Next)
 end
 
-local function UpdateLevels(Buffer)
-	local Segments = 32
-	local Size = math.max(1, math.floor(#Buffer / Segments))
-	Player.Levels = {}
-	for Segment = 0, Segments - 1 do
-		local Sum = 0
-		local Count = 0
-		for Index = Segment * Size + 1, math.min(#Buffer, (Segment + 1) * Size), 64 do
-			Sum = Sum + math.abs(Buffer[Index])
-			Count = Count + 1
-		end
-		table.insert(Player.Levels, Count > 0 and math.min(1, (Sum / Count) / 64) or 0)
+-- Remembers when a chunk the speakers just accepted will be heard, so the visualizer follows the sound.
+local function Schedule(Samples)
+	local Start = math.max(os.clock(), Player.AudioEnd or 0)
+	Player.AudioEnd = Start + #Samples / SampleRate
+	table.insert(Player.Timeline, { Samples = Samples, Start = Start, End = Player.AudioEnd })
+	while (#Player.Timeline > 3) do
+		table.remove(Player.Timeline, 1)
 	end
-	Player.Tick = 0
 end
 
 -- Pushes decoded audio to speakers until one of them is full.
@@ -154,7 +169,6 @@ local function Feed()
 			end
 			Player.Bytes = Player.Bytes + #Chunk
 			Player.Buffer = Player.Decoder(Chunk)
-			UpdateLevels(Player.Buffer)
 			Player.Pending = {}
 			for _, Speaker in ipairs(Speakers()) do
 				Player.Pending[Speaker.Name] = Speaker.Device
@@ -171,6 +185,7 @@ local function Feed()
 			end
 		end
 		if (next(Player.Pending) ~= nil) then return end
+		Schedule(Player.Buffer)
 		Player.Buffer = nil
 	end
 end
@@ -484,26 +499,250 @@ local function NowPlaying(Y)
 	end
 end
 
+--
+-- Visualizer
+--
+
+local function BuildTables()
+	local N = Visual.Window
+	local Bits = math.floor(math.log(N, 2) + .5)
+	for Index = 0, N - 1 do
+		local Reversed, Value = 0, Index
+		for _ = 1, Bits do
+			Reversed = Reversed * 2 + Value % 2
+			Value = math.floor(Value / 2)
+		end
+		Visual.Reverse[Index + 1] = Reversed + 1
+		Visual.Hann[Index + 1] = .5 - .5 * math.cos(2 * math.pi * Index / (N - 1))
+	end
+	for Index = 0, N / 2 - 1 do
+		Visual.Cos[Index + 1] = math.cos(2 * math.pi * Index / N)
+		Visual.Sin[Index + 1] = -math.sin(2 * math.pi * Index / N)
+	end
+end
+
+-- Splits roughly 50 Hz to 12 kHz into Count bands spaced evenly in pitch, each at least one bin wide.
+local function BuildBands(Count)
+	if (#Visual.Reverse == 0) then BuildTables() end
+	Visual.Count = Count
+	local MaxBin = math.floor(12000 * Visual.Window / SampleRate)
+	Visual.Edges = { 1 }
+	for Band = 1, Count do
+		Visual.Edges[Band + 1] = math.max(Visual.Edges[Band] + 1, math.floor(MaxBin ^ (Band / Count) + .5))
+	end
+	Visual.Bands, Visual.Peaks = {}, {}
+end
+
+-- The samples the speakers are playing right now and where they start.
+local function Audible()
+	local Now = os.clock()
+	for _, Chunk in ipairs(Player.Timeline) do
+		if (Now >= Chunk.Start and Now < Chunk.End) then
+			local Offset = math.floor((Now - Chunk.Start) * SampleRate) + 1
+			return Chunk.Samples, math.max(1, math.min(Offset, #Chunk.Samples - Visual.Window + 1))
+		end
+	end
+	return nil
+end
+
+-- Power of each FFT bin (0 is DC) for a Hann-windowed slice of the audio.
+local function Spectrum(Samples, Offset)
+	local N = Visual.Window
+	local Re, Im = {}, {}
+	for Index = 1, N do
+		local Target = Visual.Reverse[Index]
+		Re[Target] = (Samples[Offset + Index - 1] or 0) * Visual.Hann[Index]
+		Im[Target] = 0
+	end
+	local Size = 2
+	while (Size <= N) do
+		local Half = Size / 2
+		local Step = N / Size
+		for Start = 1, N, Size do
+			for K = 0, Half - 1 do
+				local Cos, Sin = Visual.Cos[K * Step + 1], Visual.Sin[K * Step + 1]
+				local A, B = Start + K, Start + K + Half
+				local TRe = Re[B] * Cos - Im[B] * Sin
+				local TIm = Re[B] * Sin + Im[B] * Cos
+				Re[B], Im[B] = Re[A] - TRe, Im[A] - TIm
+				Re[A], Im[A] = Re[A] + TRe, Im[A] + TIm
+			end
+		end
+		Size = Size * 2
+	end
+	local Power = {}
+	for Bin = 0, N / 2 - 1 do
+		Power[Bin] = Re[Bin + 1] * Re[Bin + 1] + Im[Bin + 1] * Im[Bin + 1]
+	end
+	return Power
+end
+
+-- Loudness of one band from 0 to 1 over a 54 dB range, from its loudest bin.
+local function BandLevel(Power, Band)
+	local Loudest = 0
+	for Bin = Visual.Edges[Band], Visual.Edges[Band + 1] - 1 do
+		if ((Power[Bin] or 0) > Loudest) then Loudest = Power[Bin] end
+	end
+	-- A full-scale sine through a Hann window peaks at a quarter of the window length.
+	local Amplitude = math.sqrt(Loudest) / (Visual.Window / 4)
+	local Decibels = 20 * math.log(Amplitude / 128 + 1e-9, 10)
+	return math.max(0, math.min(1, (Decibels + 54) / 54))
+end
+
+-- Moves every band towards the audio playing now: bars jump up and fall back slowly.
+-- Returns false once everything has settled, so idle frames are not redrawn.
+local function Analyze()
+	if (Visual.Count ~= Visual.Wanted) then BuildBands(Visual.Wanted) end
+	local Samples, Offset = Audible()
+	if (Player.State ~= "playing" and Player.State ~= "paused") then Samples = nil end
+	Visual.Wave = Samples and { Samples = Samples, Offset = Offset } or nil
+	local Moving = Samples ~= nil
+	local Power = Samples and Spectrum(Samples, Offset)
+	for Band = 1, Visual.Count do
+		local Target = Power and BandLevel(Power, Band) or 0
+		local Current = Visual.Bands[Band] or 0
+		Current = (Target > Current) and Target or math.max(Target, Current - .07)
+		Visual.Bands[Band] = Current
+		local Peak = Visual.Peaks[Band] or 0
+		Visual.Peaks[Band] = (Current >= Peak) and Current or math.max(Current, Peak - .025)
+		if (Current > 0 or Visual.Peaks[Band] > 0) then Moving = true end
+	end
+	return Moving
+end
+
+-- Teletext characters split a cell into 2x3 pixels; Bits sets them (1, 2 top row, 4, 8 middle, 16, 32 bottom).
+-- The sixth bit cannot be drawn directly, so those cells swap colours instead.
+local function Pixels(Bits, On, Off)
+	if (Bits >= 32) then
+		return string.char(128 + 63 - Bits), Off, On
+	end
+	return string.char(128 + Bits), On, Off
+end
+
+-- Thirds of a cell filled from the bottom (Up) or from the top.
+local Thirds = {
+	Up = { 0, 48, 60, 63 },
+	Down = { 0, 3, 15, 63 }
+}
+-- A single third, counted from the bottom.
+local Slices = { 48, 12, 3 }
+
+local function BarColor(Fraction)
+	if (Fraction > .88) then return colors.red end
+	if (Fraction > .7) then return colors.orange end
+	if (Fraction > .45) then return colors.yellow end
+	return colors.lime
+end
+
+local function DrawBars(T, Th, X, Y, W, H)
+	local Count = Visual.Count
+	local Bg = Th.WindowBg
+	local BarW = math.max(1, math.floor(W / Count) - 1)
+	local Left = X + math.floor((W - Count * (BarW + 1) + 1) / 2)
+	for Band = 1, Count do
+		local Filled = math.floor((Visual.Bands[Band] or 0) * H * 3 + .5)
+		local Peak = math.floor((Visual.Peaks[Band] or 0) * H * 3 + .5)
+		local Column = Left + (Band - 1) * (BarW + 1)
+		for Row = 1, H do
+			local Part = math.max(0, math.min(3, Filled - (Row - 1) * 3))
+			local Char, Fg, CellBg = Pixels(Thirds.Up[Part + 1], BarColor(Row / H), Bg)
+			local PeakRow = math.ceil(Peak / 3)
+			if (Part == 0 and Peak > Filled and PeakRow == Row) then
+				Char, Fg, CellBg = Pixels(Slices[Peak - (Row - 1) * 3], Th.Text, Bg)
+			end
+			Gfx.Write(T, Column, Y + H - Row, string.rep(Char, BarW), Fg, CellBg)
+		end
+	end
+end
+
+-- Low notes in the middle spreading outwards, reflected above and below a centre line.
+local function DrawMirror(T, Th, X, Y, W, H)
+	local Bg = Th.WindowBg
+	local Half = math.floor(H / 2)
+	local Center = X + math.floor(W / 2)
+	for Column = X, X + W - 1 do
+		local Band = math.min(Visual.Count, math.floor(math.abs(Column - Center) * Visual.Count / math.max(1, W / 2)) + 1)
+		local Level = Visual.Bands[Band] or 0
+		local Filled = math.floor(Level * Half * 3 + .5)
+		local Color = (Level > .75) and colors.white or ((Level > .45) and colors.lightBlue or Th.Accent)
+		for Row = 1, Half do
+			local Part = math.max(0, math.min(3, Filled - (Row - 1) * 3))
+			local Char, Fg, CellBg = Pixels(Thirds.Up[Part + 1], Color, Bg)
+			Gfx.Write(T, Column, Y + Half - Row, Char, Fg, CellBg)
+			Char, Fg, CellBg = Pixels(Thirds.Down[Part + 1], Color, Bg)
+			Gfx.Write(T, Column, Y + H - Half + Row - 1, Char, Fg, CellBg)
+		end
+		if (H % 2 == 1) then
+			Gfx.Write(T, Column, Y + Half, (Filled > 0) and " " or "\140", Th.Border, (Filled > 0) and Color or Bg)
+		end
+	end
+end
+
+-- An oscilloscope trace of the samples playing now, joined into a line at 2x3 pixels per cell.
+local function DrawWave(T, Th, X, Y, W, H)
+	local PixelW, PixelH = W * 2, H * 3
+	local Lit = {}
+	local Wave = Visual.Wave
+	local Previous
+	for Pixel = 1, PixelW do
+		local Value = 0
+		if (Wave) then
+			Value = Wave.Samples[Wave.Offset + math.floor((Pixel - 1) * Visual.Window / PixelW)] or 0
+		end
+		local Height = math.max(1, math.min(PixelH, math.floor((.5 - Value / 256) * (PixelH - 1) + 1.5)))
+		local From, To = Height, Height
+		if (Previous) then
+			From, To = math.min(Previous, Height), math.max(Previous, Height)
+		end
+		for PY = From, To do
+			Lit[(PY - 1) * PixelW + Pixel] = true
+		end
+		Previous = Height
+	end
+	for Row = 1, H do
+		for Column = 1, W do
+			local Bits = 0
+			for SubY = 0, 2 do
+				for SubX = 0, 1 do
+					if (Lit[((Row - 1) * 3 + SubY) * PixelW + (Column - 1) * 2 + SubX + 1]) then
+						Bits = Bits + 2 ^ (SubY * 2 + SubX)
+					end
+				end
+			end
+			local Char, Fg, CellBg = Pixels(Bits, Wave and Th.Accent or Th.Border, Th.WindowBg)
+			Gfx.Write(T, X + Column - 1, Y + Row - 1, Char, Fg, CellBg)
+		end
+	end
+end
+
+local Drawers = { DrawBars, DrawMirror, DrawWave }
+
 local function Visualizer(Y, H)
+	local Mode = Library.Visual or 1
+	Page:Add(Ui.Tabs.new({
+		X = 1, Y = Y, W = Page.W, Items = Visual.Modes, Selected = Mode,
+		OnChange = function(_, Index)
+			Library.Visual = Index
+			SaveLibrary()
+			Build()
+		end
+	}))
+	Visual.Wanted = math.max(4, math.min(24, math.floor(Page.W / 2)))
 	Page:Add(Ui.Canvas.new({
-		X = 1, Y = Y, W = Page.W, H = H,
+		X = 1, Y = Y + 1, W = Page.W, H = H - 1,
 		OnDraw = function(Self, T, Th)
-			local Count = #Player.Levels
-			for Column = 0, Self.W - 1 do
-				local Level = 0
-				if (Count > 0 and Player.State == "playing") then
-					local Index = (Column + Player.Tick) % Count + 1
-					Level = Player.Levels[Index] * (.6 + .4 * math.abs(math.sin(Column * .7 + Player.Tick)))
-				end
-				local Height = math.floor(Level * Self.H + .5)
-				for Row = 1, Height do
-					local Color = (Row > Self.H * .7) and colors.red or ((Row > Self.H * .4) and colors.orange or Th.Accent)
-					Gfx.Write(T, Self.X + Column, Self.Y + Self.H - Row, " ", Th.Text, Color)
-				end
+			if (Visual.Count ~= Visual.Wanted) then BuildBands(Visual.Wanted) end
+			Drawers[Mode](T, Th, Self.X, Self.Y, Self.W, Self.H)
+			if (Player.State == "stopped" or #Speakers() == 0) then
+				Gfx.Center(T, Self.Y + math.floor(Self.H / 2) - 1, (#Speakers() == 0) and "Attach a speaker to play music" or "\14 bTunes", Th.SubText, Th.WindowBg, Self.X, Self.W)
 			end
-			if (Count == 0 or Player.State ~= "playing") then
-				Gfx.Center(T, Self.Y + math.floor(Self.H / 2), (#Speakers() == 0) and "Attach a speaker to play music" or "\14 bTunes", Th.SubText, Th.WindowBg, Self.X, Self.W)
-			end
+		end,
+		OnEvent = function(_, Name)
+			if (Name ~= "mouse_click") then return false end
+			Library.Visual = Mode % #Visual.Modes + 1
+			SaveLibrary()
+			Build()
+			return true
 		end
 	}))
 end
@@ -647,8 +886,11 @@ function Page:OnTerminate()
 end
 
 Page:SetInterval(.25, function()
-	Player.Tick = Player.Tick + 1
-	return Player.State ~= "stopped" or Tab == 5
+	return Player.State ~= "stopped"
+end)
+
+Page:SetInterval(.1, function()
+	return Tab == 5 and Analyze()
 end)
 
 if (Args[1] and fs.exists(Args[1])) then

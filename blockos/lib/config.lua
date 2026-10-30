@@ -14,6 +14,7 @@ Config.Defaults = {
 		Dock = { "finder", "launchpad", "terminal", "editor", "appstore", "messages", "notes", "btunes", "settings" },
 		DockSize = "small",
 		DockStyle = "solid",
+		TopbarStyle = "solid",
 		Animations = true,
 		NetworkVisible = true,
 		LockColors = "accent",
