@@ -5873,6 +5873,7 @@ function Util.BuildLock(W, H)
 	Field.OnSubmit = function(_, Value)
 		if (Server.CheckPassword(Value)) then
 			State.Locked = false
+			State.Message = nil
 			Host.SetLocked(false)
 			Host.LastInput = os.clock()
 			Log.Info("console", "Console unlocked")
