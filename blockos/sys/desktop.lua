@@ -43,7 +43,7 @@ local RedrawTimer = nil
 local ClockTimer = nil
 local LastInput = os.clock()
 local AppCache = {}
-local TopbarRegions = {}
+local Topbar = { Regions = {} }
 local DockRegions = {}
 local LastTitleClick = { Time = 0 }
 local Recording = false
@@ -54,9 +54,6 @@ local PendingLock = false
 local PendingUnlock = false
 local FadeLevel = 1
 local FullscreenHinted = false
-local ShortcutRegions = {}
-local SelectedShortcut = nil
-local LastIconClick = { Time = 0 }
 local DesktopHidden = nil
 
 local Redraw, ScheduleRedraw, Focus, Launch, Notify, Lock, CloseProc, Kill, OpenMenu, Multishell
@@ -670,12 +667,16 @@ end
 -- Drawing
 --
 
+-- Helpers are grouped into tables: CC's Lua counts every local of the enclosing chunk
+-- against each function's 200-local limit, so this file keeps its top-level locals few.
+local Draw = {}
+
 local function WallpaperRows()
 	local Settings = Config.Settings()
 	return Wallpaper.Render(Settings.Wallpaper, ScreenW, ScreenH, Settings.WallpaperColor, Settings.WallpaperImage)
 end
 
-local function DrawWallpaper()
+function Draw.Wallpaper()
 	local Rows = WallpaperRows()
 	for Y = 1, ScreenH do
 		Screen.setCursorPos(1, Y)
@@ -683,7 +684,7 @@ local function DrawWallpaper()
 	end
 end
 
-local function DrawFrame(Proc, Th, Active, Row)
+function Draw.Frame(Proc, Th, Active, Row)
 	local Y = Row or Proc.Y
 	local X, W = Proc.X, Proc.W
 	if (Proc.Fullscreen) then
@@ -701,7 +702,7 @@ local function DrawFrame(Proc, Th, Active, Row)
 	end
 end
 
-local function FormatClock()
+function Topbar.Clock()
 	local Settings = Config.Settings()
 	if (Settings.ClockSource == "game") then
 		return "Day " .. os.day() .. " " .. textutils.formatTime(os.time(), Settings.Clock24)
@@ -713,7 +714,7 @@ local function FormatClock()
 	return os.date("%a " .. Format)
 end
 
-local function UpdateStatus()
+function Topbar.UpdateStatus()
 	local Ok, Updater = pcall(BlockOS.Require, "updater")
 	if (not Ok) then return nil end
 	return Updater.State.Status
@@ -733,11 +734,9 @@ local function AppName()
 	return "BlockOS"
 end
 
-local BlurSource, BlurRow
-
 -- Smears the top of the wallpaper into blocks of its most common background colour.
-local function BlurredRow(Rows)
-	if (BlurSource == Rows) then return BlurRow end
+function Topbar.Blur(Rows)
+	if (Topbar.BlurSource == Rows) then return Topbar.BlurRow end
 	local Radius = 3
 	local Depth = math.min(3, #Rows)
 	local Out = {}
@@ -756,27 +755,27 @@ local function BlurredRow(Rows)
 		end
 		Out[X] = Best
 	end
-	BlurSource, BlurRow = Rows, table.concat(Out)
-	return BlurRow
+	Topbar.BlurSource, Topbar.BlurRow = Rows, table.concat(Out)
+	return Topbar.BlurRow
 end
 
 -- The menu bar row before any text: solid theme colour, the wallpaper itself, or a blurred copy of it.
-local function TopbarBackground(Th, Style)
+function Topbar.Background(Th, Style)
 	if (Style == "clear") then
 		local Row = WallpaperRows()[1]
 		return Row[1], Row[2], Row[3]
 	elseif (Style == "blur") then
-		return string.rep(" ", ScreenW), string.rep(Gfx.ToBlit(Th.TopbarFg), ScreenW), BlurredRow(WallpaperRows())
+		return string.rep(" ", ScreenW), string.rep(Gfx.ToBlit(Th.TopbarFg), ScreenW), Topbar.Blur(WallpaperRows())
 	end
 	return string.rep(" ", ScreenW), string.rep(Gfx.ToBlit(Th.TopbarFg), ScreenW), string.rep(Gfx.ToBlit(Th.TopbarBg), ScreenW)
 end
 
-local function DrawTopbar(Th)
-	TopbarRegions = {}
+function Draw.Topbar(Th)
+	Topbar.Regions = {}
 	local Style = Config.Settings().TopbarStyle or "solid"
 	-- The wallpaper is hidden behind a full-screen app, so its revealed menu bar stays solid.
 	if (FocusedFullscreen()) then Style = "solid" end
-	local Chars, Fgs, Bgs = TopbarBackground(Th, Style)
+	local Chars, Fgs, Bgs = Topbar.Background(Th, Style)
 	Screen.setCursorPos(1, 1)
 	Screen.blit(Chars, Fgs, Bgs)
 	-- Text without a colour picks black or white to stand out from the cell behind it.
@@ -796,37 +795,37 @@ local function DrawTopbar(Th)
 	end
 	Screen.setCursorPos(2, 1)
 	Screen.blit("\131", Gfx.ToBlit(colors.lime), Gfx.ToBlit(colors.brown))
-	table.insert(TopbarRegions, { X = 1, W = 3, Menu = "logo" })
+	table.insert(Topbar.Regions, { X = 1, W = 3, Menu = "logo" })
 	local X = 4
 	local Name = Gfx.Truncate(AppName(), 14)
 	Put(X, Name)
-	table.insert(TopbarRegions, { X = X - 1, W = #Name + 2, Menu = "app" })
+	table.insert(Topbar.Regions, { X = X - 1, W = #Name + 2, Menu = "app" })
 	X = X + #Name + 2
 	for _, Title in ipairs({ "Go", "Window" }) do
 		if (X + #Title < ScreenW - 14) then
 			Put(X, Title)
-			table.insert(TopbarRegions, { X = X - 1, W = #Title + 2, Menu = Title:lower() })
+			table.insert(Topbar.Regions, { X = X - 1, W = #Title + 2, Menu = Title:lower() })
 			X = X + #Title + 2
 		end
 	end
 	-- Show Desktop sits in the very corner, like the sliver at the end of a taskbar.
 	local Right = ScreenW
 	Put(Right, "\149")
-	table.insert(TopbarRegions, { X = Right - 1, W = 2, Action = "desktop" })
-	local Clock = FormatClock()
+	table.insert(Topbar.Regions, { X = Right - 1, W = 2, Action = "desktop" })
+	local Clock = Topbar.Clock()
 	Right = Right - #Clock - 1
 	Put(Right, Clock)
-	table.insert(TopbarRegions, { X = Right, W = #Clock, Action = "clock" })
-	local Status = UpdateStatus()
+	table.insert(Topbar.Regions, { X = Right, W = #Clock, Action = "clock" })
+	local Status = Topbar.UpdateStatus()
 	if (Status == "available" or Status == "ready") then
 		Right = Right - 3
 		Put(Right, "\24", (Style == "solid") and Th.Accent or nil)
-		table.insert(TopbarRegions, { X = Right - 1, W = 3, Action = "update" })
+		table.insert(Topbar.Regions, { X = Right - 1, W = 3, Action = "update" })
 	end
 	if (Recording) then
 		Right = Right - 7
 		Put(Right, "\7 REC", colors.red)
-		table.insert(TopbarRegions, { X = Right - 1, W = 7, Action = "recording" })
+		table.insert(Topbar.Regions, { X = Right - 1, W = 7, Action = "recording" })
 	end
 end
 
@@ -871,7 +870,7 @@ local function WriteOver(X, Y, Text, Fg)
 	Screen.blit(Text, string.rep(Gfx.ToBlit(Fg), #Text), Bg:sub(X, X + #Text - 1))
 end
 
-local function DrawDock(Th)
+function Draw.Dock(Th)
 	local Settings = Config.Settings()
 	local Clear = Settings.DockStyle == "transparent"
 	local Height = DockHeight()
@@ -924,10 +923,10 @@ end
 -- Desktop shortcuts
 --
 
-local ShortcutW, ShortcutH = 9, 4
+local Shortcuts = { Regions = {}, Selected = nil, LastClick = { Time = 0 }, W = 9, H = 4 }
 
 -- Glyph, foreground and background of a file's shortcut icon by extension.
-local FileIcons = {
+Shortcuts.Icons = {
 	lua = { "\4", colors.black, colors.yellow },
 	txt = { "\7", colors.gray, colors.white },
 	md = { "\7", colors.gray, colors.white },
@@ -941,7 +940,7 @@ local FileIcons = {
 }
 
 -- Name and icon of a shortcut, or nil while its app or file is missing (an uninstalled app, an ejected disk).
-local function ShortcutInfo(Entry)
+function Shortcuts.Info(Entry)
 	local ID = Entry:match("^app:(.+)$")
 	if (ID) then
 		local App = AppCache[ID]
@@ -953,35 +952,35 @@ local function ShortcutInfo(Entry)
 		return { Name = Name, Path = Entry, IsDir = true, Icon = { Lines = { " \16 ", "   " }, Fg = colors.white, Bg = colors.lightBlue } }
 	end
 	local Extension = (Name:match("%.(%w+)$") or ""):lower()
-	local Kind = FileIcons[Extension] or FileIcons[""]
+	local Kind = Shortcuts.Icons[Extension] or Shortcuts.Icons[""]
 	return { Name = Name, Path = Entry, Icon = { Lines = { " " .. Kind[1] .. " ", Gfx.Pad(Extension:sub(1, 3), 3, "center") }, Fg = Kind[2], Bg = Kind[3] } }
 end
 
 -- Shortcuts fill columns down the left of the desktop, between the menu bar and the dock.
-local function DrawShortcuts(Th)
-	ShortcutRegions = {}
-	local Shortcuts = Config.Settings().Shortcuts or {}
-	if (#Shortcuts == 0) then return end
-	local Rows = math.floor((DockTop() - 6) / ShortcutH) + 1
-	local Cols = math.floor((ScreenW - 1) / ShortcutW)
+function Shortcuts.Draw(Th)
+	Shortcuts.Regions = {}
+	local List = Config.Settings().Shortcuts or {}
+	if (#List == 0) then return end
+	local Rows = math.floor((DockTop() - 6) / Shortcuts.H) + 1
+	local Cols = math.floor((ScreenW - 1) / Shortcuts.W)
 	if (Rows < 1) then return end
 	local Wall = WallpaperRows()
 	local Slot = 0
-	for _, Entry in ipairs(Shortcuts) do
-		local Info = ShortcutInfo(Entry)
+	for _, Entry in ipairs(List) do
+		local Info = Shortcuts.Info(Entry)
 		if (Info) then
 			local Col, Row = math.floor(Slot / Rows), Slot % Rows
 			if (Col >= Cols) then break end
 			Slot = Slot + 1
-			local X, Y = 2 + Col * ShortcutW, 3 + Row * ShortcutH
+			local X, Y = 2 + Col * Shortcuts.W, 3 + Row * Shortcuts.H
 			local Icon = Info.Icon
 			for Line = 1, 2 do
 				Screen.setCursorPos(X + 3, Y + Line - 1)
 				Screen.blit(Gfx.Pad(Icon.Lines[Line] or "", 3), string.rep(Gfx.ToBlit(Icon.Fg), 3), string.rep(Gfx.ToBlit(Icon.Bg), 3))
 			end
-			local Label = Gfx.Pad(Info.Name, ShortcutW - 1, "center")
+			local Label = Gfx.Pad(Info.Name, Shortcuts.W - 1, "center")
 			local Fg, Bg
-			if (Entry == SelectedShortcut) then
+			if (Entry == Shortcuts.Selected) then
 				Fg, Bg = string.rep(Gfx.ToBlit(Th.AccentFg), #Label), string.rep(Gfx.ToBlit(Th.Accent), #Label)
 			else
 				-- Labels sit straight on the wallpaper, in black or white to stand out from it.
@@ -991,14 +990,14 @@ local function DrawShortcuts(Th)
 			Screen.setCursorPos(X, Y + 2)
 			Screen.blit(Label, Fg, Bg)
 			Info.Entry, Info.X, Info.Y = Entry, X, Y
-			table.insert(ShortcutRegions, Info)
+			table.insert(Shortcuts.Regions, Info)
 		end
 	end
 end
 
-local function ShortcutAt(X, Y)
-	for _, Info in ipairs(ShortcutRegions) do
-		if (X >= Info.X and X < Info.X + ShortcutW - 1 and Y >= Info.Y and Y < Info.Y + 3) then
+function Shortcuts.At(X, Y)
+	for _, Info in ipairs(Shortcuts.Regions) do
+		if (X >= Info.X and X < Info.X + Shortcuts.W - 1 and Y >= Info.Y and Y < Info.Y + 3) then
 			return Info
 		end
 	end
@@ -1019,7 +1018,7 @@ local function LaunchpadApps()
 	return List
 end
 
-local function DrawLaunchpad(Th)
+function Draw.Launchpad(Th)
 	Launchpad.Regions = {}
 	if (Launchpad.Rect) then
 		local Rect = Launchpad.Rect
@@ -1076,7 +1075,7 @@ local function ToastWidth()
 	return math.min(28, ScreenW - 2)
 end
 
-local function DrawToasts(Th)
+function Draw.Toasts(Th)
 	local Y = (FocusedFullscreen() and not RevealActive()) and 1 or 2
 	local W = ToastWidth()
 	for _, Toast in ipairs(Toasts) do
@@ -1095,7 +1094,7 @@ local function DrawToasts(Th)
 	end
 end
 
-local function DrawMenu(Th)
+function Draw.Menu(Th)
 	local Current = Menu
 	local Height = #Current.Items
 	local Shown = Current.Reveal or Height
@@ -1123,7 +1122,7 @@ local function DrawMenu(Th)
 	end
 end
 
-local function DrawDialog(Th)
+function Draw.Dialog(Th)
 	local Current = Dialog
 	local W = math.min(34, ScreenW - 4)
 	local Lines = Gfx.Wrap(Current.Text or "", W - 4)
@@ -1151,7 +1150,7 @@ local function DrawDialog(Th)
 end
 
 -- An empty window outline used while a window opens or minimizes.
-local function DrawGhost(Th)
+function Draw.Ghost(Th)
 	local X, Y, W, H = Ghost[1], Ghost[2], Ghost[3], Ghost[4]
 	Gfx.Fill(Screen, X, Y, W, H, Th.WindowBg)
 	Gfx.Fill(Screen, X, Y, W, 1, Th.TitleBg)
@@ -1186,12 +1185,12 @@ function Redraw()
 	end
 	local Th = Theme.Get()
 	Screen.setVisible(false)
-	DrawWallpaper()
+	Draw.Wallpaper()
 	local FullFocus = FocusedFullscreen()
 	if (FullFocus) then
-		ShortcutRegions = {}
+		Shortcuts.Regions = {}
 	else
-		DrawShortcuts(Th)
+		Shortcuts.Draw(Th)
 	end
 	local Revealed = FullFocus and RevealActive()
 	local Overlay = Menu or Dialog or Launchpad.Open or #Toasts > 0 or Revealed or Ghost
@@ -1201,7 +1200,7 @@ function Redraw()
 			Hide(Proc)
 		else
 			if (not Proc.Fullscreen) then
-				DrawFrame(Proc, Th, Proc == Focused)
+				Draw.Frame(Proc, Th, Proc == Focused)
 			end
 			Show(Proc)
 			if (Proc == Focused and not Overlay and not Proc.Dead) then
@@ -1216,17 +1215,17 @@ function Redraw()
 		end
 	end
 	if (not FullFocus) then
-		DrawTopbar(Th)
-		DrawDock(Th)
+		Draw.Topbar(Th)
+		Draw.Dock(Th)
 	elseif (Revealed) then
-		DrawTopbar(Th)
-		DrawFrame(Focused, Th, true, 2)
+		Draw.Topbar(Th)
+		Draw.Frame(Focused, Th, true, 2)
 	end
-	if (Launchpad.Open) then DrawLaunchpad(Th) end
-	DrawToasts(Th)
-	if (Menu) then DrawMenu(Th) end
-	if (Dialog) then DrawDialog(Th) end
-	if (Ghost) then DrawGhost(Th) end
+	if (Launchpad.Open) then Draw.Launchpad(Th) end
+	Draw.Toasts(Th)
+	if (Menu) then Draw.Menu(Th) end
+	if (Dialog) then Draw.Dialog(Th) end
+	if (Ghost) then Draw.Ghost(Th) end
 	Screen.setVisible(true)
 	RestoreCursor()
 end
@@ -1283,7 +1282,9 @@ end
 -- Session: lock, login, services
 --
 
-local function SchedulerService()
+local Daemons = {}
+
+function Daemons.Scheduler()
 	local Schedule = BlockOS.Require("schedule")
 	while (true) do
 		for _, Entry in ipairs(Schedule.CollectDue()) do
@@ -1297,7 +1298,7 @@ local function SchedulerService()
 	end
 end
 
-local function ChatService()
+function Daemons.Chat()
 	local Chat = BlockOS.Require("chat")
 	Chat.Load()
 	Chat.OpenModems()
@@ -1331,7 +1332,7 @@ local function ChatService()
 	end
 end
 
-local function UpdateService()
+function Daemons.Update()
 	local Updater = BlockOS.Require("updater")
 	sleep(10)
 	while (true) do
@@ -1353,7 +1354,7 @@ local function UpdateService()
 	end
 end
 
-local function PresenceService()
+function Daemons.Presence()
 	local Presence = BlockOS.Require("presence")
 	Presence.OpenModems()
 	Presence.Locate()
@@ -1376,10 +1377,10 @@ local function StartSession()
 	SessionStarted = true
 	Users.EnsureHome()
 	RefreshApps()
-	StartService("scheduler", SchedulerService)
-	StartService("chat", ChatService)
-	StartService("presence", PresenceService)
-	StartService("updater", UpdateService)
+	StartService("scheduler", Daemons.Scheduler)
+	StartService("chat", Daemons.Chat)
+	StartService("presence", Daemons.Presence)
+	StartService("updater", Daemons.Update)
 	for _, ID in ipairs(Config.Settings().StartupApps or {}) do
 		Launch(ID)
 	end
@@ -1603,7 +1604,7 @@ local function OpenLaunchpadMenu(Region)
 	})
 end
 
-local function OpenShortcut(Info)
+function Shortcuts.Open(Info)
 	if (Info.App) then
 		Launch(Info.App.ID, nil, { From = { Info.X + 3, Info.Y, 3, 2 } })
 	else
@@ -1611,8 +1612,8 @@ local function OpenShortcut(Info)
 	end
 end
 
-local function OpenShortcutMenu(Info, X, Y)
-	local Items = { { Text = "Open", Action = function() OpenShortcut(Info) end } }
+function Shortcuts.OpenMenu(Info, X, Y)
+	local Items = { { Text = "Open", Action = function() Shortcuts.Open(Info) end } }
 	if (Info.Path) then
 		if (not Info.IsDir) then
 			table.insert(Items, { Text = "Edit", Action = function() Launch("editor", { Info.Path }) end })
@@ -1644,15 +1645,15 @@ local function OpenShortcutMenu(Info, X, Y)
 end
 
 -- One click selects a shortcut and a second one soon after opens it.
-local function ClickShortcut(Info)
+function Shortcuts.Click(Info)
 	local Now = os.clock()
-	if (LastIconClick.Entry == Info.Entry and Now - LastIconClick.Time < .4) then
-		LastIconClick = { Time = 0 }
-		OpenShortcut(Info)
+	if (Shortcuts.LastClick.Entry == Info.Entry and Now - Shortcuts.LastClick.Time < .4) then
+		Shortcuts.LastClick = { Time = 0 }
+		Shortcuts.Open(Info)
 		return
 	end
-	LastIconClick = { Entry = Info.Entry, Time = Now }
-	SelectedShortcut = Info.Entry
+	Shortcuts.LastClick = { Entry = Info.Entry, Time = Now }
+	Shortcuts.Selected = Info.Entry
 	Redraw()
 end
 
@@ -1692,7 +1693,7 @@ local function ActivateDockItem(Item)
 end
 
 local function TopbarClick(Button, X)
-	for _, Region in ipairs(TopbarRegions) do
+	for _, Region in ipairs(Topbar.Regions) do
 		if (X >= Region.X and X < Region.X + Region.W) then
 			if (Region.Menu) then
 				OpenMenu(Region.Menu, Region.X, 2)
@@ -1747,7 +1748,9 @@ local function LaunchpadClick(Button, X, Y)
 	CloseLaunchpad()
 end
 
-local function OnClick(Button, X, Y)
+local Input = {}
+
+function Input.Click(Button, X, Y)
 	if (Dialog) then
 		for _, Item in ipairs(Dialog.Buttons) do
 			if (Item.X and Y == Item.Y and X >= Item.X and X < Item.X + Item.W) then
@@ -1768,7 +1771,7 @@ local function OnClick(Button, X, Y)
 		Menu = nil
 		Redraw()
 		if (Y ~= 1) then return end
-		for _, Region in ipairs(TopbarRegions) do
+		for _, Region in ipairs(Topbar.Regions) do
 			if (Region.Menu == Current.Name and X >= Region.X and X < Region.X + Region.W) then
 				return
 			end
@@ -1846,18 +1849,18 @@ local function OnClick(Button, X, Y)
 		Focused = nil
 		Redraw()
 	end
-	local Info = ShortcutAt(X, Y)
+	local Info = Shortcuts.At(X, Y)
 	if (Info) then
 		if (Button == 2) then
-			SelectedShortcut = Info.Entry
-			OpenShortcutMenu(Info, X, Y)
+			Shortcuts.Selected = Info.Entry
+			Shortcuts.OpenMenu(Info, X, Y)
 		else
-			ClickShortcut(Info)
+			Shortcuts.Click(Info)
 		end
 		return
 	end
-	if (SelectedShortcut) then
-		SelectedShortcut = nil
+	if (Shortcuts.Selected) then
+		Shortcuts.Selected = nil
 		Redraw()
 	end
 	if (Button == 2) then
@@ -1865,7 +1868,7 @@ local function OnClick(Button, X, Y)
 	end
 end
 
-local function OnDrag(Button, X, Y)
+function Input.Drag(Button, X, Y)
 	if (Menu) then
 		local Index = Y - Menu.Y + 1
 		if (X >= Menu.X and X < Menu.X + Menu.W and Menu.Items[Index]) then
@@ -1895,7 +1898,7 @@ local function OnDrag(Button, X, Y)
 	end
 end
 
-local function OnUp(Button, X, Y)
+function Input.Up(Button, X, Y)
 	if (Menu and Menu.Hover > 0 and Y ~= 1) then
 		local Index = Y - Menu.Y + 1
 		if (X >= Menu.X and X < Menu.X + Menu.W and Index == Menu.Hover) then
@@ -1913,7 +1916,7 @@ local function OnUp(Button, X, Y)
 	MouseTarget = nil
 end
 
-local function OnScroll(Direction, X, Y)
+function Input.Scroll(Direction, X, Y)
 	if (Launchpad.Open) then
 		Launchpad.Page = math.max(1, math.min((Launchpad.Pages or 1), Launchpad.Page + Direction))
 		Redraw()
@@ -1972,7 +1975,7 @@ local function Shortcut(Key)
 	return true
 end
 
-local function OnKey(Name, Key, Held)
+function Input.Key(Name, Key, Held)
 	local Modifier = ModifierKeys[Key]
 	if (Modifier) then
 		Modifiers[Modifier] = (Name == "key")
@@ -2033,7 +2036,7 @@ local function OnKey(Name, Key, Held)
 	end
 end
 
-local function OnText(Event)
+function Input.Text(Event)
 	if (Dialog or Menu) then return end
 	if (Launchpad.Open) then
 		Launchpad.Query = (Launchpad.Query .. Event[2]):sub(1, 20)
@@ -2046,7 +2049,7 @@ local function OnText(Event)
 	end
 end
 
-local function OnResize()
+function Input.Resize()
 	ScreenW, ScreenH = Native.getSize()
 	Screen.reposition(1, 1, ScreenW, ScreenH)
 	for _, Proc in ipairs(Processes) do
@@ -2083,8 +2086,8 @@ local function ClockTick()
 	if (Changed) then
 		Redraw()
 	elseif (not FocusedFullscreen() and not Launchpad.Open) then
-		DrawTopbar(Theme.Get())
-		if (Menu) then DrawMenu(Theme.Get()) end
+		Draw.Topbar(Theme.Get())
+		if (Menu) then Draw.Menu(Theme.Get()) end
 		RestoreCursor()
 	end
 end
@@ -2109,7 +2112,7 @@ local function HandleEvent(Event)
 		return
 	end
 	if (Name == "term_resize") then
-		OnResize()
+		Input.Resize()
 		return
 	end
 	if (Locked) then
@@ -2131,17 +2134,17 @@ local function HandleEvent(Event)
 		LastInput = os.clock()
 	end
 	if (Name == "mouse_click") then
-		OnClick(Event[2], Event[3], Event[4])
+		Input.Click(Event[2], Event[3], Event[4])
 	elseif (Name == "mouse_drag") then
-		OnDrag(Event[2], Event[3], Event[4])
+		Input.Drag(Event[2], Event[3], Event[4])
 	elseif (Name == "mouse_up") then
-		OnUp(Event[2], Event[3], Event[4])
+		Input.Up(Event[2], Event[3], Event[4])
 	elseif (Name == "mouse_scroll") then
-		OnScroll(Event[2], Event[3], Event[4])
+		Input.Scroll(Event[2], Event[3], Event[4])
 	elseif (Name == "key" or Name == "key_up") then
-		OnKey(Name, Event[2], Event[3])
+		Input.Key(Name, Event[2], Event[3])
 	elseif (Name == "char" or Name == "paste") then
-		OnText(Event)
+		Input.Text(Event)
 	elseif (Name == "terminate") then
 		if (Focused and not Focused.Dead) then
 			Resume(Focused, "terminate")
@@ -2169,7 +2172,9 @@ end
 --
 
 -- Waits without losing events: anything that arrives is handled after the animation.
-local function Wait(Seconds)
+local Anim = {}
+
+function Anim.Wait(Seconds)
 	local Timer = os.startTimer(Seconds)
 	while (true) do
 		local Event = table.pack(os.pullEventRaw())
@@ -2178,35 +2183,35 @@ local function Wait(Seconds)
 	end
 end
 
-local function EaseOut(T)
+function Anim.EaseOut(T)
 	return 1 - (1 - T) ^ 2
 end
 
-local function EaseIn(T)
+function Anim.EaseIn(T)
 	return T * T
 end
 
-local function Lerp(A, B, T)
+function Anim.Lerp(A, B, T)
 	return math.floor(A + (B - A) * T + .5)
 end
 
-local function PlayRect(From, To, Frames, Ease)
+function Anim.PlayRect(From, To, Frames, Ease)
 	for Frame = 1, Frames do
 		local T = Ease(Frame / Frames)
 		Ghost = {
-			Lerp(From[1], To[1], T), Lerp(From[2], To[2], T),
-			math.max(1, Lerp(From[3], To[3], T)), math.max(1, Lerp(From[4], To[4], T))
+			Anim.Lerp(From[1], To[1], T), Anim.Lerp(From[2], To[2], T),
+			math.max(1, Anim.Lerp(From[3], To[3], T)), math.max(1, Anim.Lerp(From[4], To[4], T))
 		}
 		Redraw()
-		Wait(FrameTime)
+		Anim.Wait(FrameTime)
 	end
 	Ghost = nil
 end
 
-local function Fade(From, To, Steps)
+function Anim.Fade(From, To, Steps)
 	for Step = 1, Steps do
 		if (not SetFadeLevel(From + (To - From) * Step / Steps)) then return end
-		Wait(FrameTime)
+		Anim.Wait(FrameTime)
 	end
 end
 
@@ -2218,18 +2223,18 @@ function Players.open(Animation)
 		Proc.Opening = nil
 		return
 	end
-	PlayRect(Animation.From or DockSlot(Proc), WindowRect(Proc), 5, EaseOut)
+	Anim.PlayRect(Animation.From or DockSlot(Proc), WindowRect(Proc), 5, Anim.EaseOut)
 	Proc.Opening = nil
 	Redraw()
 end
 
 function Players.minimize(Animation)
 	if (not Animation.Proc.Minimized) then return end
-	PlayRect(Animation.From, DockSlot(Animation.Proc), 5, EaseIn)
+	Anim.PlayRect(Animation.From, DockSlot(Animation.Proc), 5, Anim.EaseIn)
 	Redraw()
 end
 
-local function HasToast(Toast)
+function Anim.HasToast(Toast)
 	for _, Other in ipairs(Toasts) do
 		if (Other == Toast) then return true end
 	end
@@ -2238,20 +2243,20 @@ end
 
 function Players.toast(Animation)
 	local Toast = Animation.Toast
-	while (HasToast(Toast) and (Toast.Slide or 0) > 0) do
+	while (Anim.HasToast(Toast) and (Toast.Slide or 0) > 0) do
 		Toast.Slide = math.floor(Toast.Slide * .45)
 		Redraw()
-		Wait(FrameTime)
+		Anim.Wait(FrameTime)
 	end
 end
 
 function Players.toastout(Animation)
 	local Toast = Animation.Toast
 	local W = ToastWidth()
-	while (HasToast(Toast) and (Toast.Slide or 0) < W) do
+	while (Anim.HasToast(Toast) and (Toast.Slide or 0) < W) do
 		Toast.Slide = math.min(W, (Toast.Slide or 0) + math.ceil(W / 3))
 		Redraw()
-		Wait(FrameTime)
+		Anim.Wait(FrameTime)
 	end
 	for Index, Other in ipairs(Toasts) do
 		if (Other == Toast) then table.remove(Toasts, Index) break end
@@ -2259,7 +2264,7 @@ function Players.toastout(Animation)
 	Redraw()
 end
 
-local function CaptureScreen()
+function Anim.CaptureScreen()
 	local Rows = {}
 	for Y = 1, ScreenH do
 		Rows[Y] = { Screen.getLine(Y) }
@@ -2267,7 +2272,7 @@ local function CaptureScreen()
 	return Rows
 end
 
-local function PaintRows(Rows)
+function Anim.PaintRows(Rows)
 	for Y = 1, ScreenH do
 		Screen.setCursorPos(1, Y)
 		Screen.blit(Rows[Y][1], Rows[Y][2], Rows[Y][3])
@@ -2275,7 +2280,7 @@ local function PaintRows(Rows)
 end
 
 -- Bleeds one screen into another cell by cell, spreading out from the middle.
-local function Dissolve(From, To, Frames)
+function Anim.Dissolve(From, To, Frames)
 	local MidX, MidY = (ScreenW + 1) / 2, (ScreenH + 1) / 2
 	local Reach = math.sqrt(MidX ^ 2 + (MidY * 1.5) ^ 2)
 	local Ranks = {}
@@ -2287,7 +2292,7 @@ local function Dissolve(From, To, Frames)
 		end
 	end
 	for Frame = 1, Frames do
-		local Cut = EaseIn(Frame / Frames)
+		local Cut = Anim.EaseIn(Frame / Frames)
 		for Y = 1, ScreenH do
 			local Old, New, Rank = From[Y], To[Y], Ranks[Y]
 			local Text, Fg, Bg = {}, {}, {}
@@ -2300,28 +2305,28 @@ local function Dissolve(From, To, Frames)
 			Screen.setCursorPos(1, Y)
 			Screen.blit(table.concat(Text), table.concat(Fg), table.concat(Bg))
 		end
-		Wait(FrameTime)
+		Anim.Wait(FrameTime)
 	end
 end
 
 function Players.lock()
-	local From = CaptureScreen()
+	local From = Anim.CaptureScreen()
 	EnterLock()
-	local To = CaptureScreen()
+	local To = Anim.CaptureScreen()
 	-- Nothing reaches the monitor until we yield, so the lock screen never flashes up early.
-	PaintRows(From)
-	Dissolve(From, To, 16)
+	Anim.PaintRows(From)
+	Anim.Dissolve(From, To, 16)
 	PendingLock = false
 	if (LockScreen) then LockScreen:Draw() end
 end
 
 function Players.unlock()
-	local From = CaptureScreen()
+	local From = Anim.CaptureScreen()
 	PendingUnlock = false
 	Unlock()
-	local To = CaptureScreen()
-	PaintRows(From)
-	Dissolve(From, To, 12)
+	local To = Anim.CaptureScreen()
+	Anim.PaintRows(From)
+	Anim.Dissolve(From, To, 12)
 	Redraw()
 end
 
@@ -2333,7 +2338,7 @@ function Players.menu(Animation)
 		if (Menu ~= Current) then return end
 		Current.Reveal = math.max(1, math.ceil(Count * Frame / Frames))
 		Redraw()
-		Wait(FrameTime)
+		Anim.Wait(FrameTime)
 	end
 	Current.Reveal = nil
 	if (Menu == Current) then Redraw() end
@@ -2346,13 +2351,13 @@ function Players.launchpad(Animation)
 	if (not Animation.Opening) then From, To = Full, Seed end
 	for Frame = 1, 4 do
 		if (not Launchpad.Open) then break end
-		local T = Animation.Opening and EaseOut(Frame / 4) or EaseIn(Frame / 4)
+		local T = Animation.Opening and Anim.EaseOut(Frame / 4) or Anim.EaseIn(Frame / 4)
 		Launchpad.Rect = {
-			Lerp(From[1], To[1], T), Lerp(From[2], To[2], T),
-			math.max(1, Lerp(From[3], To[3], T)), math.max(1, Lerp(From[4], To[4], T))
+			Anim.Lerp(From[1], To[1], T), Anim.Lerp(From[2], To[2], T),
+			math.max(1, Anim.Lerp(From[3], To[3], T)), math.max(1, Anim.Lerp(From[4], To[4], T))
 		}
 		Redraw()
-		Wait(FrameTime)
+		Anim.Wait(FrameTime)
 	end
 	Launchpad.Rect = nil
 	if (not Animation.Opening) then Launchpad.Open = false end
@@ -2360,11 +2365,11 @@ function Players.launchpad(Animation)
 end
 
 function Players.fadein()
-	Fade(0, 1, 5)
+	Anim.Fade(0, 1, 5)
 end
 
 function Players.power(Animation)
-	Fade(1, 0, 6)
+	Anim.Fade(1, 0, 6)
 	Animation.Run()
 end
 

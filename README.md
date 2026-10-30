@@ -190,7 +190,9 @@ python tools/build.py
 ```
 
 Commit the regenerated `install.lua` and `manifest.cfg`; computers pick up the
-new version on their next update check.
+new version on their next update check. The build stops if any Lua file has more
+than 200 locals in scope at once (counting those of enclosing functions), since
+CC: Tweaked refuses to load it.
 
 ## Credits
 
