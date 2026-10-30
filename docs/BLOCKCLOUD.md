@@ -183,7 +183,12 @@ bcloud password
 
 ### Install BlockDrive on a desktop computer
 
-On each BlockOS desktop computer that should use the Data Center:
+The simplest way: open the **App Store** on a BlockOS desktop computer, find **BlockDrive**
+under Discover (Utilities) and choose **Get**. The App Store keeps it up to date. The App Store
+installs a single file, so BlockDrive sets up the BlockCloud client library
+(`/blockos/lib/cloud`) and the `bdrive` command the first time it opens.
+
+Or, from the terminal, on each BlockOS desktop computer that should use the Data Center:
 
 ```
 wget run https://raw.githubusercontent.com/tamayaren/BlockOS/server/blockdrive-install.lua

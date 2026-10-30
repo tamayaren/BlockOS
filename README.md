@@ -27,7 +27,8 @@ On a Data Center computer (Advanced Computer with a wireless, ender or wired mod
 wget run https://raw.githubusercontent.com/tamayaren/BlockOS/server/server-install.lua
 ```
 
-On each BlockOS desktop computer that should use the Data Center:
+On each BlockOS desktop computer that should use the Data Center, get **BlockDrive**
+from the App Store (Discover > Utilities), or run:
 
 ```
 wget run https://raw.githubusercontent.com/tamayaren/BlockOS/server/blockdrive-install.lua
@@ -131,7 +132,7 @@ same API, go to **bTunes → Add → Server**.
   Choose whether it opens in a window or full screen.
 * **App Store → Discover**: apps from catalogs. The default catalog is
   [`store/catalog.cfg`](store/catalog.cfg) (games such as Snake, Breakout and
-  SameGame, and more); add more under *Sources*.
+  SameGame, BlockDrive for Data Center storage, and more); add more under *Sources*.
 * **Terminal**: `bpm pastebin <code> [name]`, `bpm url <url> [name]`,
   `bpm search`, `bpm get <id>`, `bpm list`, `bpm remove <id>`.
 

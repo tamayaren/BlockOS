@@ -543,16 +543,29 @@ end
 -- Updating the BlockDrive client itself
 --
 
+-- Installed from the App Store, the package sets BlockDrivePackage; otherwise the installer
+-- wrote version.txt next to the app.
+function Act.Version()
+	if (BlockDrivePackage) then return BlockDrivePackage.Version end
+	return ((BlockOS.Require("config").ReadText("/blockos/apps/blockdrive/version.txt") or "0"):gsub("%s", ""))
+end
+
 function Act.Update()
+	if (BlockDrivePackage) then
+		if (Ui.Confirm("Check for Updates", "BlockDrive came from the App Store, which keeps it up to date. Open the App Store?", "Open")) then
+			BlockOS.Launch("appstore")
+		end
+		return
+	end
 	local Updater = BlockOS.Require("updater")
-	local Current = BlockOS.Require("config").ReadText("/blockos/apps/blockdrive/version.txt") or "0"
+	local Current = Act.Version()
 	Run("Checking for updates...", function()
 		local Body, Err = Updater.Get(Act.ManifestUrl)
 		local Manifest = Body and textutils.unserialise(Body)
 		if (type(Manifest) ~= "table" or Manifest.Edition ~= "blockdrive" or type(Manifest.Files) ~= "table") then
 			return nil, { Code = "invalid", Message = "Could not read the update manifest: " .. tostring(Err or "bad format") }
 		end
-		if (Updater.Compare(Current:gsub("%s", ""), Manifest.Version) >= 0) then return "BlockDrive " .. Current:gsub("%s", "") .. " is up to date." end
+		if (Updater.Compare(Current, Manifest.Version) >= 0) then return "BlockDrive " .. Current .. " is up to date." end
 		local Base = Act.ManifestUrl:gsub("[^/]*$", "")
 		local Files = {}
 		for _, File in ipairs(Manifest.Files) do
@@ -627,8 +640,7 @@ function Act.MainMenu(X, Y)
 	elseif (Index == 5) then
 		Act.Update()
 	elseif (Index == 6) then
-		local Version = BlockOS.Require("config").ReadText("/blockos/apps/blockdrive/version.txt") or "?"
-		Ui.Alert("BlockDrive", "BlockDrive " .. Version:gsub("%s", "") .. "\nNetwork storage on BlockCloud servers in the Data Center, over rednet.")
+		Ui.Alert("BlockDrive", "BlockDrive " .. Act.Version() .. "\nNetwork storage on BlockCloud servers in the Data Center, over rednet.")
 	end
 end
 

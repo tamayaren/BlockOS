@@ -61,6 +61,7 @@ for Index, Path in ipairs(List) do
 	if (Index % 6 == 0) then sleep(0) end
 end
 WriteFile("blockos/apps/blockdrive/version.txt", Version)
+WriteFile("blockos/lib/cloud/version.txt", Version)
 
 -- Pin it to the Dock on first install, the way bundled apps are.
 local SettingsPath = "/blockos/data/settings.dat"
