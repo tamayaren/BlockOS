@@ -154,6 +154,13 @@ appears in the menu bar; open it, or go to **Settings → Software Update**. You
 can also turn on background installs. Updates never touch `/blockos/data`
 (settings, users, messages) or `/blockos/userapps`.
 
+### Recovery
+
+If BlockOS won't start or the screen is unusable, hold **Ctrl+T** while the
+boot screen is showing, then press **S** for the recovery shell. From there you
+can run `/blockos/bin/bpm update` to update, or the install command above to
+reinstall, and then `reboot`. Your data is kept.
+
 ## Development
 
 ```
