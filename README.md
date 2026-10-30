@@ -132,7 +132,10 @@ same API, go to **bTunes → Add → Server**.
   Choose whether it opens in a window or full screen.
 * **App Store → Discover**: apps from catalogs. The default catalog is
   [`store/catalog.cfg`](store/catalog.cfg) (games such as Snake, Breakout and
-  SameGame, BlockDrive for Data Center storage, and more); add more under *Sources*.
+  SameGame, BlockDrive for Data Center storage, and more); add more under
+  *Sources*. BlockDrive connects to computers running BlockOS Server Edition;
+  see the [`server` branch](https://github.com/tamayaren/BlockOS/tree/server)
+  and its [BlockCloud guide](https://github.com/tamayaren/BlockOS/blob/server/docs/BLOCKCLOUD.md).
 * **Terminal**: `bpm pastebin <code> [name]`, `bpm url <url> [name]`,
   `bpm search`, `bpm get <id>`, `bpm list`, `bpm remove <id>`.
 
