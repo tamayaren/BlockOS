@@ -1,6 +1,7 @@
 -- Checks freshly installed servers from the network: each must boot Server Edition on its own,
 -- announce itself and answer, without any test code installed on it.
 local T = dofile("/tests/testlib.lua")
+local Versions = dofile("/tests/versions.lua")
 
 T.Run(function()
 	local Client = BlockOS.Require("cloud/client")
@@ -13,7 +14,7 @@ T.Run(function()
 	end
 	for Name, ID in pairs(Expected) do
 		local Node = Found[Name]
-		T.Check("install: " .. Name .. " boots Server Edition and announces", Node and Node.ComputerID == ID and Node.Version == "1.0.0",
+		T.Check("install: " .. Name .. " boots Server Edition and announces", Node and Node.ComputerID == ID and Node.Version == Versions.Server,
 			Node and (Node.ComputerID .. " " .. Node.Version) or "not found")
 	end
 	local Ping = Found.rack1 and Client.Request(Found.rack1.ComputerID, "core", "ping", {})

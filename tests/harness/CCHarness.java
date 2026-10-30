@@ -14,6 +14,10 @@
 //   screen <id>                        print this computer's screen when the run ends
 //   snap <id> <at s>                   print this computer's screen at a given time
 //   http-local                         allow HTTP to localhost (for a test update channel)
+//   drive <id> <side> <dir> <disk id> <label|->  attach a disk drive holding a floppy stored in dir
+//   wired <id> <side> <count> <dir>    a wired modem with <count> disk drives (drive_0, drive_1, ...),
+//                                      floppies with IDs 100, 101, ... stored in <dir>/drive_N
+//   insert <id> <side|drive_N> <at s>  put the floppy back into a drive that ejected it
 
 import dan200.computercraft.api.lua.IArguments;
 import dan200.computercraft.api.lua.LuaException;
@@ -74,6 +78,132 @@ public class CCHarness {
         }
     }
 
+    // A disk drive with a floppy (125 KB, like CC's), enough for the disk API and fs mounts.
+    public static final class DiskDrive implements IPeripheral {
+        final File dir;
+        final int diskId;
+        String label;
+        String remoteName;
+        volatile boolean present = true;
+        final Map<IComputerAccess, String> mounts = new java.util.concurrent.ConcurrentHashMap<>();
+        final List<IComputerAccess> computers = new CopyOnWriteArrayList<>();
+
+        DiskDrive(File dir, int diskId, String label) {
+            this.dir = dir;
+            this.diskId = diskId;
+            this.label = label;
+            dir.mkdirs();
+        }
+
+        @Override public String getType() { return "drive"; }
+        @Override public boolean equals(IPeripheral other) { return other == this; }
+        // Like CC's drive, mounting happens on a later tick, once the computer is running.
+        @Override public void attach(IComputerAccess computer) {
+            computers.add(computer);
+        }
+
+        void tick() {
+            if (!present) return;
+            for (IComputerAccess computer : computers) {
+                if (!mounts.containsKey(computer)) mount(computer);
+            }
+        }
+        @Override public void detach(IComputerAccess computer) {
+            computers.remove(computer);
+            String path = mounts.remove(computer);
+            if (path != null) computer.unmount(path);
+        }
+
+        void mount(IComputerAccess computer) {
+            // Like CC's drive: disk, disk2, disk3, ... whichever is free.
+            String path = null;
+            for (int n = 1; n < 1000 && path == null; n++) {
+                try {
+                    String location = n == 1 ? "disk" : "disk" + n;
+                    WritableFileMount mount = new WritableFileMount(dir, 125_000);
+                    path = remoteName == null ? computer.mountWritable(location, mount) : computer.mountWritable(location, mount, remoteName);
+                } catch (RuntimeException e) {
+                    return;
+                }
+            }
+            if (path == null) return;
+            mounts.put(computer, path);
+            computer.queueEvent("disk", remoteName == null ? computer.getAttachmentName() : remoteName);
+        }
+
+        void eject() {
+            if (!present) return;
+            present = false;
+            for (IComputerAccess computer : computers) {
+                String path = mounts.remove(computer);
+                if (path != null) computer.unmount(path);
+                computer.queueEvent("disk_eject", remoteName == null ? computer.getAttachmentName() : remoteName);
+            }
+        }
+
+        void insert() {
+            if (present) return;
+            present = true;
+        }
+
+        @LuaFunction public final boolean isDiskPresent() { return present; }
+        @LuaFunction public final Object getDiskLabel() { return present ? label : null; }
+        @LuaFunction public final void setDiskLabel(java.util.Optional<String> value) { label = value.orElse(null); }
+        @LuaFunction public final boolean hasData(IComputerAccess computer) { return present && mounts.containsKey(computer); }
+        @LuaFunction public final Object getMountPath(IComputerAccess computer) { return present ? mounts.get(computer) : null; }
+        @LuaFunction public final boolean hasAudio() { return false; }
+        @LuaFunction public final Object getAudioTitle() { return false; }
+        @LuaFunction public final Object getDiskID() { return present ? diskId : null; }
+        @LuaFunction public final void ejectDisk() { eject(); }
+
+        // The same methods, called through a wired modem's callRemote.
+        Object[] call(IComputerAccess computer, String method, IArguments args, int offset) throws LuaException {
+            return switch (method) {
+                case "isDiskPresent" -> new Object[] { present };
+                case "getDiskLabel" -> new Object[] { present ? label : null };
+                case "setDiskLabel" -> { label = args.optString(offset).orElse(null); yield new Object[0]; }
+                case "hasData" -> new Object[] { present && mounts.containsKey(computer) };
+                case "getMountPath" -> new Object[] { present ? mounts.get(computer) : null };
+                case "hasAudio" -> new Object[] { false };
+                case "getAudioTitle" -> new Object[] { false };
+                case "getDiskID" -> new Object[] { present ? diskId : null };
+                case "ejectDisk" -> { eject(); yield new Object[0]; }
+                default -> throw new LuaException("No such method " + method);
+            };
+        }
+    }
+
+    // A wired modem with remote disk drives, as on a Data Center's cable network.
+    public static final class WiredModem implements IPeripheral {
+        final Map<String, DiskDrive> remotes = new LinkedHashMap<>();
+        static final List<String> METHODS = List.of("isDiskPresent", "getDiskLabel", "setDiskLabel", "hasData", "getMountPath",
+            "hasAudio", "getAudioTitle", "getDiskID", "ejectDisk");
+
+        @Override public String getType() { return "modem"; }
+        @Override public Set<String> getAdditionalTypes() { return Set.of("peripheral_hub"); }
+        @Override public boolean equals(IPeripheral other) { return other == this; }
+        @Override public void attach(IComputerAccess computer) { for (DiskDrive drive : remotes.values()) drive.attach(computer); }
+        @Override public void detach(IComputerAccess computer) { for (DiskDrive drive : remotes.values()) drive.detach(computer); }
+
+        @LuaFunction public final boolean isWireless() { return false; }
+        @LuaFunction public final void open(int channel) { }
+        @LuaFunction public final boolean isOpen(int channel) { return true; }
+        @LuaFunction public final void close(int channel) { }
+        @LuaFunction public final void closeAll() { }
+        @LuaFunction public final void transmit(IArguments args) { }
+        @LuaFunction public final String getNameLocal() { return "computer_0"; }
+        @LuaFunction public final List<String> getNamesRemote() { return new ArrayList<>(remotes.keySet()); }
+        @LuaFunction public final boolean isPresentRemote(String name) { return remotes.containsKey(name); }
+        @LuaFunction public final Object getTypeRemote(String name) { return remotes.containsKey(name) ? "drive" : null; }
+        @LuaFunction public final Object hasTypeRemote(String name, String type) { return remotes.containsKey(name) ? "drive".equals(type) : null; }
+        @LuaFunction public final Object getMethodsRemote(String name) { return remotes.containsKey(name) ? METHODS : null; }
+        @LuaFunction public final Object[] callRemote(IComputerAccess computer, IArguments args) throws LuaException {
+            DiskDrive drive = remotes.get(args.getString(0));
+            if (drive == null) throw new LuaException("No peripheral " + args.getString(0));
+            return drive.call(computer, args.getString(1), args, 2);
+        }
+    }
+
     record Off(double from, double to) {}
     record Event(double at, String name, Object[] args) {}
 
@@ -83,6 +213,9 @@ public class CCHarness {
         List<Off> off = new ArrayList<>();
         List<Event> events = new ArrayList<>();
         List<Double> snaps = new ArrayList<>();
+        Map<String, DiskDrive> drives = new LinkedHashMap<>();
+        Map<String, WiredModem> wired = new LinkedHashMap<>();
+        List<Object[]> inserts = new ArrayList<>();
         boolean waited, screen;
     }
 
@@ -114,6 +247,20 @@ public class CCHarness {
                 }
                 case "wait" -> nodes.get(Integer.parseInt(p[1])).waited = true;
                 case "screen" -> nodes.get(Integer.parseInt(p[1])).screen = true;
+                case "drive" -> nodes.get(Integer.parseInt(p[1])).drives.put(p[2],
+                    new DiskDrive(new File(p[3]), Integer.parseInt(p[4]), p[5].equals("-") ? null : p[5].replace('_', ' ')));
+                case "wired" -> {
+                    WiredModem modem = new WiredModem();
+                    Node owner = nodes.get(Integer.parseInt(p[1]));
+                    for (int i = 0; i < Integer.parseInt(p[3]); i++) {
+                        DiskDrive drive = new DiskDrive(new File(p[4], "drive_" + i), 100 + i, null);
+                        drive.remoteName = "drive_" + i;
+                        modem.remotes.put(drive.remoteName, drive);
+                        owner.drives.put(drive.remoteName, drive);
+                    }
+                    owner.wired.put(p[2], modem);
+                }
+                case "insert" -> nodes.get(Integer.parseInt(p[1])).inserts.add(new Object[] { p[2], Double.parseDouble(p[3]) });
                 case "snap" -> nodes.get(Integer.parseInt(p[1])).snaps.add(Double.parseDouble(p[2]));
                 case "off" -> nodes.get(Integer.parseInt(p[1])).off.add(new Off(Double.parseDouble(p[2]), Double.parseDouble(p[3])));
                 case "event" -> {
@@ -138,6 +285,13 @@ public class CCHarness {
             node.modem = new Modem();
             NETWORK.add(node.modem);
             node.computer.getEnvironment().setPeripheral(ComputerSide.TOP, node.modem);
+            for (Map.Entry<String, DiskDrive> drive : node.drives.entrySet()) {
+                if (drive.getValue().remoteName != null) continue;
+                node.computer.getEnvironment().setPeripheral(ComputerSide.valueOf(drive.getKey().toUpperCase()), drive.getValue());
+            }
+            for (Map.Entry<String, WiredModem> modem : node.wired.entrySet()) {
+                node.computer.getEnvironment().setPeripheral(ComputerSide.valueOf(modem.getKey().toUpperCase()), modem.getValue());
+            }
             node.computer.turnOn();
         }
 
@@ -168,6 +322,14 @@ public class CCHarness {
                         it.remove();
                     }
                 }
+                for (Iterator<Object[]> it = node.inserts.iterator(); it.hasNext(); ) {
+                    Object[] insert = it.next();
+                    if (now >= (Double) insert[1]) {
+                        System.out.printf("[harness %.1fs] disk inserted into computer %d %s%n", now, node.id, insert[0]);
+                        node.drives.get((String) insert[0]).insert();
+                        it.remove();
+                    }
+                }
                 for (Iterator<Double> it = node.snaps.iterator(); it.hasNext(); ) {
                     double at = it.next();
                     if (now >= at) {
@@ -176,6 +338,7 @@ public class CCHarness {
                     }
                 }
                 node.computer.tick();
+                if (node.computer.isOn()) for (DiskDrive drive : node.drives.values()) drive.tick();
                 if (node.waited) {
                     anyWaited = true;
                     if (!new File(node.root, "harness_done").exists()) allDone = false;

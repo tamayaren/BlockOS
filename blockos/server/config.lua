@@ -16,6 +16,11 @@ Config.Defaults["cloud/server"] = {
 	DisplayName = "Data Center",
 	StorageRoot = "/blockcloud/storage",
 	DefaultShare = "Shared",
+	-- Disk drives (direct or over wired modems): ShareDisks turns them all off, DiskMode is how
+	-- new disks are used (pool, share or off), Disks holds per-disk { Name, Mode } by disk ID.
+	ShareDisks = true,
+	DiskMode = "pool",
+	Disks = {},
 	PairingOpen = true,
 	Encrypt = true,
 	QuotaMB = 0,

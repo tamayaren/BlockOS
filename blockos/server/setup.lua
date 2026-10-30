@@ -139,7 +139,7 @@ function Setup.Run(Opts)
 	end
 
 	function Builders.storage()
-		Heading("Storage location", "BlockDrive keeps shared files here. Clients can never reach anything outside it.")
+		Heading("Storage location", "BlockDrive keeps shared files here. Disk drives you attach, also over wired modems, are pooled with it automatically.")
 		local Items = Locations()
 		local List = Page:Add(Ui.List.new({ X = 3, Y = 6, W = Page.W - 4, H = math.min(#Items, 4), Items = Items, Bg = "Panel" }))
 		for Index, Item in ipairs(Items) do

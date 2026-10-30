@@ -1,24 +1,27 @@
--- BlockDrive: network file storage. Every remote path is resolved inside the configured
--- storage root; uploads are staged in a hidden folder and swapped in only once complete and
--- verified, so an interrupted transfer never damages an existing file.
+-- BlockDrive: network file storage. Every remote path is resolved inside the storage volumes
+-- (see server/volumes): the main storage folder pooled with the server's disk drives, plus
+-- disks shared on their own. Uploads are staged in a hidden folder on the disk that will hold
+-- the file and swapped in only once complete and verified, so an interrupted transfer never
+-- damages an existing file.
 
 local Path = BlockOS.Require("cloud/path")
 local Codec = BlockOS.Require("cloud/codec")
 local Auth = BlockOS.Require("cloud/auth")
 local Server = BlockOS.Require("server/config")
+local Volumes = BlockOS.Require("server/volumes")
 
 local Drive = {
 	Name = "blockdrive",
 	Title = "BlockDrive",
 	Description = "Network file storage.",
-	Version = "1.0"
+	Version = "1.1"
 }
 
 Drive.ChunkSize = 8192
 Drive.TransferIdle = 90 * 1000
 Drive.MaxTransfers = 16
 Drive.MaxPerClient = 4
--- Space left free on the storage disk so the server itself can still write logs and settings.
+-- Space left free on the computer's own disk so the server can still write logs and settings.
 Drive.Reserve = 16 * 1024
 
 local Transfers = {}
@@ -29,18 +32,19 @@ local function Fail(Code, Detail)
 	Rpc.Fail(Code, Detail)
 end
 
+-- The main storage folder; disks are listed by Drive.Volumes().
 function Drive.Root()
-	return "/" .. fs.combine(Server.Settings().StorageRoot, "")
+	return Volumes.Primary()
 end
 
-local function TempDir()
-	return fs.combine(Drive.Root(), Path.Reserved .. "/tmp")
+function Drive.Volumes()
+	return Volumes.List()
 end
 
-local function Resolve(Remote)
-	local Local, Err, Normal = Path.Resolve(Drive.Root(), Remote)
-	if (not Local) then Fail(Err) end
-	return Local, Normal
+local function Target(Remote)
+	local Result, Err = Volumes.Target(Remote)
+	if (not Result) then Fail(Err) end
+	return Result
 end
 
 local function Modified(Local)
@@ -53,19 +57,42 @@ local function Entry(Local, Name)
 	return { Name = Name, Dir = Dir, Size = Dir and 0 or fs.getSize(Local), Modified = Modified(Local) }
 end
 
-local function FreeSpace()
-	local Free = tonumber(fs.getFreeSpace(Drive.Root())) or 0
-	return math.max(0, Free - Drive.Reserve)
+-- Usable free bytes on one root.
+local function FreeSpace(Root)
+	Root = Root or Drive.Root()
+	if (not fs.exists(Root)) then return 0 end
+	local Free = tonumber(fs.getFreeSpace(Root)) or 0
+	local OwnDisk = not fs.getDrive or fs.getDrive(Root) == "hdd"
+	return math.max(0, Free - (OwnDisk and Drive.Reserve or 0))
 end
 
--- Bytes a client may still add: free disk space, further limited by the quota if one is set.
-local function Available()
-	local Free = FreeSpace()
+local function QuotaLeft()
 	local Quota = (tonumber(Server.Settings().QuotaMB) or 0) * 1024 * 1024
-	if (Quota > 0) then
-		Free = math.min(Free, math.max(0, Quota - Usage.Bytes))
+	if (Quota <= 0) then return math.huge end
+	return math.max(0, Quota - Usage.Bytes)
+end
+
+-- Bytes clients may still add to a space (its roots together), limited by the quota.
+local function Available(Roots)
+	local Total = 0
+	for _, Root in ipairs(Roots) do Total = Total + FreeSpace(Root) end
+	return math.min(Total, QuotaLeft())
+end
+
+-- The largest single file a space can take: files are never split across disks.
+local function Largest(Roots)
+	local Best = 0
+	for _, Root in ipairs(Roots) do Best = math.max(Best, FreeSpace(Root)) end
+	return math.min(Best, QuotaLeft())
+end
+
+local function Capacity(Roots)
+	if (not fs.getCapacity) then return nil end
+	local Total = 0
+	for _, Root in ipairs(Roots) do
+		if (fs.exists(Root)) then Total = Total + (tonumber(fs.getCapacity(Root)) or 0) end
 	end
-	return Free
+	return Total
 end
 
 local function MaxFile()
@@ -73,16 +100,7 @@ local function MaxFile()
 	return Limit > 0 and Limit or nil
 end
 
-local function SizeOf(Local)
-	if (not fs.isDir(Local)) then return fs.getSize(Local) end
-	local Total = 0
-	for _, Name in ipairs(fs.list(Local)) do
-		Total = Total + SizeOf(fs.combine(Local, Name))
-	end
-	return Total
-end
-
--- Walks the storage tree to total its size, yielding now and then on large trees.
+-- Walks every volume to total its size, yielding now and then on large trees.
 local function Scan()
 	local Bytes, Files, Folders, Steps = 0, 0, 0, 0
 	local function Walk(Dir)
@@ -101,7 +119,9 @@ local function Scan()
 			end
 		end
 	end
-	Walk(Drive.Root())
+	for _, Root in ipairs(Volumes.Roots()) do
+		if (fs.isDir(Root)) then pcall(Walk, Root) end
+	end
 	Usage.Bytes, Usage.Files, Usage.Folders = Bytes, Files, Folders
 	Usage.Scanned = true
 	Usage.Dirty = false
@@ -116,15 +136,20 @@ local function Changed()
 	os.queueEvent("blockcloud_storage")
 end
 
-local function RequireParent(Normal)
-	local Parent = Path.Parent(Normal)
-	local LocalParent = Resolve(Parent)
-	if (not fs.isDir(LocalParent)) then Fail("not_found", "The folder " .. (Parent == "" and "/" or Parent) .. " does not exist.") end
+local function ParentOf(T)
+	return { Normal = Path.Parent(T.Normal), Rel = Path.Parent(T.Rel), Roots = T.Roots, Space = T.Space, Volume = T.Volume }
 end
 
--- Top-level folders are the shares clients see first; they can only be removed on the server.
-local function RequireNotShare(Normal)
-	if (Normal == "" or not Normal:find("/")) then
+local function RequireParent(T)
+	if (not Volumes.IsDir(ParentOf(T))) then
+		local Parent = Path.Parent(T.Normal)
+		Fail("not_found", "The folder " .. (Parent == "" and "/" or Parent) .. " does not exist.")
+	end
+end
+
+-- Top-level folders are the shares clients see first; they can only be changed on the server.
+local function RequireNotShare(T)
+	if (T.Normal == "" or not T.Normal:find("/")) then
 		Fail("denied", "Shares can only be created, renamed or removed on the server.")
 	end
 end
@@ -176,22 +201,49 @@ local function Checksum(Local, Size)
 	return Sum
 end
 
+-- Shares: the pool's top-level folders (from every pooled root), then disks shared on their own.
+local function Shares()
+	local Seen, List = {}, {}
+	for _, Root in ipairs(Volumes.Pool()) do
+		if (fs.isDir(Root)) then
+			for _, Name in ipairs(fs.list(Root)) do
+				if (Name ~= Path.Reserved and not Seen[Name] and fs.isDir(fs.combine(Root, Name))) then
+					Seen[Name] = true
+					table.insert(List, { Name = Name, Roots = Volumes.Pool(), Kind = "storage" })
+				end
+			end
+		end
+	end
+	table.sort(List, function(A, B) return A.Name:lower() < B.Name:lower() end)
+	for _, Volume in ipairs(Volumes.List()) do
+		if (Volume.Mode == "share" and Volumes.Get(Volume.Name) == Volume) then
+			table.insert(List, { Name = Volume.Name, Roots = { Volume.Root }, Kind = "disk", Label = Volume.Label })
+		end
+	end
+	return List
+end
+
 local Ops = {}
 
 function Ops.info(Ctx)
 	local Settings = Server.Settings()
-	local Shares = {}
-	for _, Name in ipairs(fs.list(Drive.Root())) do
-		if (Name ~= Path.Reserved and fs.isDir(fs.combine(Drive.Root(), Name))) then
-			table.insert(Shares, Name)
-		end
+	local Names, Details = {}, {}
+	for _, Share in ipairs(Shares()) do
+		table.insert(Names, Share.Name)
+		table.insert(Details, {
+			Name = Share.Name, Kind = Share.Kind, Label = Share.Label, Disks = #Share.Roots,
+			Free = Available(Share.Roots), Largest = Largest(Share.Roots), Capacity = Capacity(Share.Roots)
+		})
 	end
-	table.sort(Shares, function(A, B) return A:lower() < B:lower() end)
+	local Pool = Volumes.Pool()
 	return {
 		Name = Settings.DisplayName,
-		Shares = Shares,
-		Free = Available(),
-		Capacity = fs.getCapacity and tonumber(fs.getCapacity(Drive.Root())) or nil,
+		Shares = Names,
+		Volumes = Details,
+		Free = Available(Pool),
+		Largest = Largest(Pool),
+		Capacity = Capacity(Pool),
+		PooledDisks = #Pool - 1,
 		Used = Usage.Bytes,
 		Quota = (tonumber(Settings.QuotaMB) or 0) * 1024 * 1024,
 		MaxFile = MaxFile(),
@@ -201,92 +253,176 @@ function Ops.info(Ctx)
 end
 
 function Ops.list(Ctx, Args)
-	local Local, Normal = Resolve(Args.Path or "")
-	if (not fs.exists(Local)) then Fail("not_found") end
-	if (not fs.isDir(Local)) then Fail("not_dir") end
-	local Entries = {}
-	for Index, Name in ipairs(fs.list(Local)) do
-		if (Name ~= Path.Reserved) then
-			table.insert(Entries, Entry(fs.combine(Local, Name), Name))
+	local T = Target(Args.Path or "")
+	local Parts = Volumes.Find(T)
+	if (#Parts == 0) then Fail("not_found") end
+	local Merged, Entries = {}, {}
+	local Count = 0
+	for _, Part in ipairs(Parts) do
+		if (not Part.Dir) then Fail("not_dir") end
+		for _, Name in ipairs(fs.list(Part.Local)) do
+			if (Name ~= Path.Reserved) then
+				local Item = Entry(fs.combine(Part.Local, Name), Name)
+				local Previous = Merged[Name]
+				-- The same name on several disks: one folder, or the newest file.
+				if (not Previous or (not Previous.Dir and (Item.Dir or Item.Modified > Previous.Modified))) then
+					Merged[Name] = Item
+				end
+			end
+			Count = Count + 1
+			if (Count % 100 == 0) then Rpc.Yield() end
 		end
-		if (Index % 100 == 0) then Rpc.Yield() end
+	end
+	for _, Item in pairs(Merged) do table.insert(Entries, Item) end
+	if (T.Normal == "") then
+		for _, Share in ipairs(Shares()) do
+			if (Share.Kind == "disk") then
+				local Item = Entry(Share.Roots[1], Share.Name)
+				Item.Disk, Item.Label = true, Share.Label
+				table.insert(Entries, Item)
+			end
+		end
 	end
 	table.sort(Entries, function(A, B)
 		if (A.Dir ~= B.Dir) then return A.Dir end
 		return A.Name:lower() < B.Name:lower()
 	end)
-	return { Path = Normal, Entries = Entries, Free = Available(), ReadOnly = Ctx.Client.Permission ~= "write" }
+	return { Path = T.Normal, Entries = Entries, Free = Available(T.Roots), Largest = Largest(T.Roots), ReadOnly = Ctx.Client.Permission ~= "write" }
 end
 
 function Ops.stat(Ctx, Args)
-	local Local, Normal = Resolve(Args.Path or "")
-	if (not fs.exists(Local)) then Fail("not_found") end
-	local Result = Entry(Local, Path.Name(Normal))
-	Result.Path = Normal
+	local T = Target(Args.Path or "")
+	local Part = Volumes.Locate(T)
+	if (not Part) then Fail("not_found") end
+	local Result = Entry(Part.Local, Path.Name(T.Normal))
+	Result.Path = T.Normal
 	return Result
 end
 
 function Ops.mkdir(Ctx, Args)
-	local Local, Normal = Resolve(Args.Path)
-	RequireNotShare(Normal)
-	if (fs.exists(Local)) then Fail("exists") end
-	RequireParent(Normal)
-	fs.makeDir(Local)
-	Log.Info("blockdrive", Ctx.Client.Name .. " created " .. Normal)
+	local T = Target(Args.Path)
+	RequireNotShare(T)
+	if (Volumes.Locate(T)) then Fail("exists") end
+	RequireParent(T)
+	-- Folders cost almost nothing; make it where its parent already is.
+	local Root = Volumes.Place(T, 0, FreeSpace)
+	fs.makeDir(Volumes.Local(Root, T.Rel))
+	Log.Info("blockdrive", Ctx.Client.Name .. " created " .. T.Normal)
 	Changed()
-	return Ops.stat(Ctx, { Path = Normal })
+	return Ops.stat(Ctx, { Path = T.Normal })
 end
 
 function Ops.delete(Ctx, Args)
-	local Local, Normal = Resolve(Args.Path)
-	RequireNotShare(Normal)
-	if (not fs.exists(Local)) then Fail("not_found") end
-	fs.delete(Local)
-	Log.Info("blockdrive", Ctx.Client.Name .. " deleted " .. Normal)
+	local T = Target(Args.Path)
+	RequireNotShare(T)
+	local Parts = Volumes.Find(T)
+	if (#Parts == 0) then Fail("not_found") end
+	for _, Part in ipairs(Parts) do fs.delete(Part.Local) end
+	Log.Info("blockdrive", Ctx.Client.Name .. " deleted " .. T.Normal)
 	Changed()
 	return true
 end
 
 local function Relocate(Ctx, Args, Copy)
-	local From, FromNormal = Resolve(Args.From)
-	local To, ToNormal = Resolve(Args.To)
-	if (not Copy) then RequireNotShare(FromNormal) end
-	RequireNotShare(ToNormal)
-	if (not fs.exists(From)) then Fail("not_found") end
-	if (fs.exists(To)) then Fail("exists") end
-	if (Path.Within(FromNormal, ToNormal)) then Fail("invalid", "A folder cannot be moved or copied into itself.") end
-	RequireParent(ToNormal)
-	if (Copy) then
-		if (SizeOf(From) > Available()) then Fail("no_space") end
-		fs.copy(From, To)
+	local From, To = Target(Args.From), Target(Args.To)
+	if (not Copy) then RequireNotShare(From) end
+	RequireNotShare(To)
+	local Shown = Volumes.Locate(From)
+	if (not Shown) then Fail("not_found") end
+	if (Volumes.Locate(To)) then Fail("exists") end
+	if (From.Space == To.Space and Path.Within(From.Rel, To.Rel)) then Fail("invalid", "A folder cannot be moved or copied into itself.") end
+	RequireParent(To)
+	-- A folder may be spread over several disks; a file is its newest copy.
+	local Parts = Shown.Dir and Volumes.Find(From) or { Shown }
+	if (not Copy and From.Space == To.Space) then
+		-- Within one space, each disk renames its own part: no data moves, no space needed.
+		for _, Part in ipairs(Parts) do
+			local Dest = Volumes.Local(Part.Root, To.Rel)
+			local Parent = fs.getDir(Dest)
+			if (not fs.exists(Parent)) then fs.makeDir(Parent) end
+			fs.move(Part.Local, Dest)
+		end
+		for _, Part in ipairs(Volumes.Find(From)) do fs.delete(Part.Local) end
 	else
-		fs.move(From, To)
+		-- Copy file by file, each to a disk with room for it, so a folder spread over several
+		-- disks can be copied even when no single disk could hold all of it.
+		local Files, Dirs, Size = {}, {}, 0
+		local function Collect(Local, Rel)
+			if (fs.isDir(Local)) then
+				table.insert(Dirs, Rel)
+				for _, Name in ipairs(fs.list(Local)) do
+					if (Name ~= Path.Reserved) then Collect(fs.combine(Local, Name), Path.Join(Rel, Name)) end
+				end
+			else
+				table.insert(Files, { Source = Local, Rel = Rel, Size = fs.getSize(Local) })
+				Size = Size + fs.getSize(Local)
+			end
+		end
+		for _, Part in ipairs(Parts) do Collect(Part.Local, To.Rel) end
+		if (Size > Available(To.Roots)) then Fail("no_space") end
+		local Ok, Err = pcall(function()
+			for _, Rel in ipairs(Dirs) do
+				local Spot = { Rel = Rel, Roots = To.Roots }
+				if (not Volumes.IsDir(Spot)) then fs.makeDir(Volumes.Local(Volumes.Place(Spot, 0, FreeSpace), Rel)) end
+			end
+			for Index, File in ipairs(Files) do
+				local Spot = { Rel = File.Rel, Roots = To.Roots }
+				if (not Volumes.Locate(Spot)) then
+					local Root = Volumes.Place(Spot, File.Size, FreeSpace)
+					if (not Root) then error("no disk has room for " .. File.Rel, 0) end
+					local Dest = Volumes.Local(Root, File.Rel)
+					local Parent = fs.getDir(Dest)
+					if (not fs.exists(Parent)) then fs.makeDir(Parent) end
+					fs.copy(File.Source, Dest)
+				end
+				if (Index % 20 == 0) then Rpc.Yield() end
+			end
+		end)
+		if (not Ok) then
+			-- A half-made copy is worse than none (usually a disk filled up or was removed).
+			for _, Root in ipairs(To.Roots) do
+				local Dest = Volumes.Local(Root, To.Rel)
+				if (fs.exists(Dest)) then pcall(fs.delete, Dest) end
+			end
+			Changed()
+			Fail("no_space", "The copy did not fit: " .. tostring(Err))
+		end
+		if (not Copy) then
+			for _, Part in ipairs(Volumes.Find(From)) do fs.delete(Part.Local) end
+		end
 	end
-	Log.Info("blockdrive", Ctx.Client.Name .. (Copy and " copied " or " moved ") .. FromNormal .. " to " .. ToNormal)
+	Log.Info("blockdrive", Ctx.Client.Name .. (Copy and " copied " or " moved ") .. From.Normal .. " to " .. To.Normal)
 	Changed()
-	return Ops.stat(Ctx, { Path = ToNormal })
+	return Ops.stat(Ctx, { Path = To.Normal })
 end
 
 function Ops.move(Ctx, Args) return Relocate(Ctx, Args, false) end
 function Ops.copy(Ctx, Args) return Relocate(Ctx, Args, true) end
 
 function Ops.upload_begin(Ctx, Args)
-	local Local, Normal = Resolve(Args.Path)
+	local T = Target(Args.Path)
 	local Size, Sum = tonumber(Args.Size), tonumber(Args.Sum)
 	if (not Size or Size < 0 or Size ~= math.floor(Size) or not Sum) then Fail("invalid") end
-	RequireNotShare(Normal)
-	RequireParent(Normal)
-	if (fs.isDir(Local)) then Fail("is_dir") end
-	if (fs.exists(Local) and not Args.Overwrite) then Fail("exists") end
+	RequireNotShare(T)
+	RequireParent(T)
+	local Existing = Volumes.Locate(T)
+	if (Existing and Existing.Dir) then Fail("is_dir") end
+	if (Existing and not Args.Overwrite) then Fail("exists") end
 	if (MaxFile() and Size > MaxFile()) then Fail("too_large", "Files on this server can be at most " .. math.floor(MaxFile() / 1024) .. " KB.") end
-	-- The quota counts the net change, but the disk must hold the staged copy beside the old file.
-	local Replacing = fs.exists(Local) and fs.getSize(Local) or 0
-	if (Size - Replacing > Available() or Size > FreeSpace()) then Fail("no_space") end
+	-- The quota counts the net change; the chosen disk must hold the whole staged copy.
+	if (Size - (Existing and fs.getSize(Existing.Local) or 0) > QuotaLeft()) then Fail("no_space") end
+	local Root = Volumes.Place(T, Size, FreeSpace, Existing and Existing.Root)
+	if (not Root) then
+		Fail("no_space", #T.Roots > 1 and "No single disk has room for a file this size (files are not split across disks)." or nil)
+	end
 	local Item = NewTransfer(Ctx, "up")
-	Item.Path, Item.Local, Item.Size, Item.Sum, Item.Overwrite = Normal, Local, Size, Sum, Args.Overwrite and true or false
-	Item.Temp = fs.combine(TempDir(), Item.ID)
+	Item.Path, Item.Target, Item.Size, Item.Sum, Item.Overwrite = T.Normal, T, Size, Sum, Args.Overwrite and true or false
+	-- Staged on the disk that will hold the file, so the final swap is a rename.
+	Item.Root = Root
+	Item.Local = Volumes.Local(Root, T.Rel)
+	Item.Temp = fs.combine(Volumes.TempDir(Root), Item.ID)
 	Item.Received, Item.Next, Item.Running = 0, 1, 1
-	local Handle = fs.open(Item.Temp, "wb")
+	local Handle = fs.isDir(Volumes.TempDir(Root)) and fs.open(Item.Temp, "wb")
 	if (not Handle) then
 		Transfers[Item.ID] = nil
 		Fail("internal", "Could not create a staging file.")
@@ -304,8 +440,12 @@ function Ops.upload_chunk(Ctx, Args)
 	if (Index ~= Item.Next) then return { Next = Item.Next, Received = Item.Received } end
 	if (Codec.Adler32(Data) ~= tonumber(Args.Sum)) then Fail("checksum") end
 	if (Item.Received + #Data > Item.Size) then Fail("invalid", "More data than announced.") end
-	local Handle = fs.open(Item.Temp, "ab")
-	if (not Handle) then Fail("internal", "Could not write the staging file.") end
+	local Handle = fs.exists(Item.Temp) and fs.open(Item.Temp, "ab")
+	if (not Handle) then
+		-- The disk was removed under the transfer.
+		EndTransfer(Item)
+		Fail("transfer_lost")
+	end
 	local Written = pcall(Handle.write, Data)
 	pcall(Handle.close)
 	if (not Written or fs.getSize(Item.Temp) ~= Item.Received + #Data) then
@@ -320,14 +460,21 @@ end
 
 function Ops.upload_commit(Ctx, Args)
 	local Item = Transfer(Ctx, Args.Transfer, "up")
+	if (not fs.exists(Item.Temp)) then
+		EndTransfer(Item)
+		Fail("transfer_lost")
+	end
 	if (Item.Received ~= Item.Size or Item.Running ~= Item.Sum or fs.getSize(Item.Temp) ~= Item.Size) then
 		EndTransfer(Item)
 		Fail("checksum")
 	end
-	if (fs.isDir(Item.Local) or (fs.exists(Item.Local) and not Item.Overwrite)) then
+	local Existing = Volumes.Locate(Item.Target)
+	if (Existing and (Existing.Dir or not Item.Overwrite)) then
 		EndTransfer(Item)
-		Fail(fs.isDir(Item.Local) and "is_dir" or "exists")
+		Fail(Existing.Dir and "is_dir" or "exists")
 	end
+	local Parent = fs.getDir(Item.Local)
+	if (not fs.exists(Parent)) then fs.makeDir(Parent) end
 	-- Swap the finished file in. The old version is kept aside until the new one is in place.
 	local Backup = Item.Temp .. ".old"
 	if (fs.exists(Item.Local)) then fs.move(Item.Local, Backup) end
@@ -338,6 +485,10 @@ function Ops.upload_commit(Ctx, Args)
 		Fail("internal", "Could not save the file: " .. tostring(Err))
 	end
 	if (fs.exists(Backup)) then fs.delete(Backup) end
+	-- The new copy went to another disk: remove the old one (until then, the newer one wins).
+	for _, Part in ipairs(Volumes.Find(Item.Target)) do
+		if (Part.Local ~= Item.Local) then pcall(fs.delete, Part.Local) end
+	end
 	Transfers[Item.ID] = nil
 	Log.Info("blockdrive", Ctx.Client.Name .. " uploaded " .. Item.Path .. " (" .. Item.Size .. " bytes)")
 	Changed()
@@ -351,14 +502,15 @@ function Ops.upload_abort(Ctx, Args)
 end
 
 function Ops.download_begin(Ctx, Args)
-	local Local, Normal = Resolve(Args.Path)
-	if (not fs.exists(Local)) then Fail("not_found") end
-	if (fs.isDir(Local)) then Fail("is_dir") end
+	local T = Target(Args.Path)
+	local Part = Volumes.Locate(T)
+	if (not Part) then Fail("not_found") end
+	if (Part.Dir) then Fail("is_dir") end
 	local Item = NewTransfer(Ctx, "down")
-	Item.Path, Item.Local = Normal, Local
-	Item.Size = fs.getSize(Local)
-	Item.Modified = Modified(Local)
-	Item.Sum = Checksum(Local, Item.Size)
+	Item.Path, Item.Local = T.Normal, Part.Local
+	Item.Size = fs.getSize(Part.Local)
+	Item.Modified = Modified(Part.Local)
+	Item.Sum = Checksum(Part.Local, Item.Size)
 	return {
 		Transfer = Item.ID, Size = Item.Size, Sum = Item.Sum, ChunkSize = Drive.ChunkSize,
 		Chunks = math.ceil(Item.Size / Drive.ChunkSize), Modified = Item.Modified
@@ -389,7 +541,8 @@ local Access = {
 	upload_begin = "write", upload_chunk = "write", upload_commit = "write", upload_abort = "write"
 }
 
--- Creates the storage root and default share, and clears staging files left by a shutdown.
+-- Creates the storage root and default share, clears staging files left by a shutdown,
+-- and finds the disks.
 function Drive.Prepare()
 	local Settings = Server.Settings()
 	local Ok, Err = Path.ValidRoot(Settings.StorageRoot)
@@ -400,9 +553,11 @@ function Drive.Prepare()
 		local Share = fs.combine(Root, Settings.DefaultShare)
 		if (not fs.exists(Share)) then fs.makeDir(Share) end
 	end
-	if (fs.exists(TempDir())) then fs.delete(TempDir()) end
-	fs.makeDir(TempDir())
+	local Temp = Volumes.TempDir(Root)
+	if (fs.exists(Temp)) then fs.delete(Temp) end
+	fs.makeDir(Temp)
 	Transfers = {}
+	Volumes.Refresh()
 end
 
 function Drive.Init(Ctx)
@@ -416,8 +571,25 @@ function Drive.Init(Ctx)
 	Log.Info("blockdrive", "Serving " .. Drive.Root())
 end
 
+-- After disks come and go: update the volumes and drop uploads whose disk went away.
+local function DisksChanged()
+	if (not Volumes.Refresh()) then return end
+	local Roots = {}
+	for _, Root in ipairs(Volumes.Roots()) do Roots[Root] = true end
+	for _, Item in pairs(Transfers) do
+		if (Item.Root and not Roots[Item.Root]) then
+			Log.Warn("blockdrive", "Stopped the upload of " .. tostring(Item.Path) .. ": its disk was removed")
+			EndTransfer(Item)
+		end
+	end
+	Changed()
+end
+
+local DiskEvents = { disk = true, disk_eject = true, peripheral = true, peripheral_detach = true, blockcloud_config = true }
+
 function Drive.Run(Ctx)
 	local Timer = os.startTimer(1)
+	local DiskTimer
 	while (true) do
 		local Event, A = os.pullEvent()
 		if (Event == "timer" and A == Timer) then
@@ -433,6 +605,13 @@ function Drive.Run(Ctx)
 				os.queueEvent("blockcloud_storage")
 			end
 			Timer = os.startTimer(30)
+		elseif (Event == "timer" and A == DiskTimer) then
+			DiskTimer = nil
+			DisksChanged()
+		elseif (DiskEvents[Event]) then
+			-- A wired network of drives sends a burst of events; look once it settles.
+			if (DiskTimer) then os.cancelTimer(DiskTimer) end
+			DiskTimer = os.startTimer(1)
 		elseif (Event == "blockcloud_storage" and Usage.Dirty) then
 			-- Rescan soon after changes, but not on every single one.
 			os.cancelTimer(Timer)
@@ -448,11 +627,20 @@ function Drive.ActiveTransfers()
 end
 
 function Drive.Health()
-	local Free = FreeSpace()
+	local Pool = Volumes.Pool()
+	local Free = Available(Pool)
 	local Active = Drive.ActiveTransfers()
-	local Detail = (Active > 0 and (Active .. " transfer" .. (Active == 1 and "" or "s") .. ", ") or "") .. math.floor(Free / 1024) .. " KB free"
+	local Detail = (Active > 0 and (Active .. " transfer" .. (Active == 1 and "" or "s") .. ", ") or "")
+		.. math.floor(Free / 1024) .. " KB free" .. (#Pool > 1 and (", " .. (#Pool - 1) .. " disk" .. (#Pool == 2 and "" or "s")) or "")
 	if (Free < 32 * 1024) then return "warn", "Storage nearly full (" .. Detail .. ")" end
 	return "ok", Detail
+end
+
+-- Space figures for the console and bcloud.
+Drive.FreeSpace = FreeSpace
+function Drive.PoolSpace()
+	local Pool = Volumes.Pool()
+	return Available(Pool), Capacity(Pool), #Pool - 1
 end
 
 function Drive.Info()

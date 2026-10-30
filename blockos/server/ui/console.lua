@@ -14,6 +14,7 @@ local Log = BlockOS.Require("server/log")
 local Protocol = BlockOS.Require("cloud/protocol")
 local Path = BlockOS.Require("cloud/path")
 local Updater = BlockOS.Require("updater")
+local Volumes = BlockOS.Require("server/volumes")
 
 local Page = Ui.Page.new()
 local Tabs = { "Overview", "Clients", "Pairing", "Logs", "Settings" }
@@ -105,8 +106,9 @@ function Tab.Overview(X, Y, W, H)
 	if (Drive and Drive.Root) then
 		local Root = Drive.Root()
 		local Usage = Drive.Usage()
-		local Free = tonumber(fs.getFreeSpace(Root)) or 0
-		local Capacity = fs.getCapacity and tonumber(fs.getCapacity(Root)) or nil
+		-- The pool: the main storage folder and every pooled disk together.
+		local Free, Capacity, Pooled = Drive.PoolSpace()
+		local Counts = Volumes.Summary()
 		Page:Add(Ui.Label.new({ X = X, Y = Row, Text = "Storage", Fg = "SubText" }))
 		if (Capacity and Capacity > 0) then
 			Page:Add(Ui.Progress.new({ X = X + 10, Y = Row, W = math.max(4, W - 30), Value = 1 - Free / Capacity }))
@@ -115,7 +117,12 @@ function Tab.Overview(X, Y, W, H)
 			Page:Add(Ui.Label.new({ X = X + 10, Y = Row, W = W - 10, Text = Gfx.FormatSize(Free) .. " free" }))
 		end
 		Page:Add(Ui.Label.new({ X = X + 10, Y = Row + 1, W = W - 10, Fg = "SubText",
-			Text = Root .. "  \7  " .. Usage.Files .. " files, " .. Gfx.FormatSize(Usage.Bytes) }))
+			Text = Root .. (Pooled > 0 and (" + " .. Pooled .. " disk" .. (Pooled == 1 and "" or "s")) or "") .. "  \7  " .. Usage.Files .. " files, " .. Gfx.FormatSize(Usage.Bytes) }))
+		if (Counts.share + Counts.off > 0) then
+			Page:Add(Ui.Label.new({ X = X + 10, Y = Row + 2, W = W - 10, Fg = "SubText",
+				Text = Counts.share .. " disk" .. (Counts.share == 1 and "" or "s") .. " shared on their own, " .. Counts.off .. " unused" }))
+			Row = Row + 1
+		end
 		Row = Row + 3
 	end
 	local List = Clients.List()
@@ -237,7 +244,7 @@ end
 -- Settings
 --
 
-local Sections = { "General", "Storage", "Security", "Updates", "Services", "Appearance" }
+local Sections = { "General", "Storage", "Disks", "Security", "Updates", "Services", "Appearance" }
 local Section = {}
 
 -- A labelled input with a Set button; Apply returns an error message or nil.
@@ -313,6 +320,77 @@ function Section.Storage(X, Y, W)
 	Page:Add(Ui.Button.new({ X = X, Y = Y + 8, Text = " Open in Finder ", Style = "primary", OnClick = function()
 		local Drive = Util.Drive()
 		Host.Launch("finder", { Drive and Drive.Root() or Settings.StorageRoot })
+	end }))
+end
+
+local ModeNames = { pool = "pooled", share = "own share", off = "unused" }
+
+-- Disk drives, attached directly or over wired modems: pooled, shared on their own, or unused.
+function Section.Disks(X, Y, W, H)
+	local Settings = Server.Settings()
+	Volumes.Refresh()
+	Util.Switch(X, Y, W, "Use disk drives", "ShareDisks", function()
+		Volumes.Refresh()
+		os.queueEvent("blockcloud_storage")
+		Build()
+	end)
+	Page:Add(Ui.Label.new({ X = X, Y = Y + 1, Text = "New disks" }))
+	local Modes = { "pool", "share", "off" }
+	local Selected = 1
+	for Index, Mode in ipairs(Modes) do
+		if (Mode == (Settings.DiskMode or "pool")) then Selected = Index end
+	end
+	Page:Add(Ui.Tabs.new({ X = X + 10, Y = Y + 1, W = math.min(27, W - 10), Items = { "Pool", "Own share", "Unused" }, Selected = Selected,
+		OnChange = function(_, Index)
+			Settings.DiskMode = Modes[Index]
+			Server.Save()
+			Volumes.Refresh()
+			os.queueEvent("blockcloud_storage")
+		end }))
+	local Drive = Util.Drive()
+	local Items = {}
+	for _, Volume in ipairs(Volumes.List()) do
+		local Free = Volume.Mode ~= "off" and Drive and Drive.FreeSpace(Volume.Root)
+		table.insert(Items, {
+			Text = Volume.Name, Volume = Volume, Icon = "\22",
+			IconFg = Volume.Mode == "pool" and "Accent" or (Volume.Mode == "share" and colors.cyan or "SubText"),
+			Right = ModeNames[Volume.Mode] .. (Free and ("  " .. Gfx.FormatSize(Free)) or "")
+		})
+	end
+	if (#Items == 0) then
+		Page:Add(Ui.Label.new({ X = X, Y = Y + 3, W = W, H = 5, Fg = "SubText",
+			Text = "No disk drives with a disk. Attach disk drives directly or over wired modems; each disk adds its space to the pool, or becomes its own share." }))
+		return
+	end
+	local List = Page:Add(Ui.List.new({ X = X, Y = Y + 3, W = W, H = math.max(2, H - 7), Items = Items, Bg = "Panel" }))
+	List.Selected = 1
+	Page:Add(Ui.Label.new({ X = X, Y = Y + H - 3, W = W, Fg = "SubText", Text = function()
+		local Item = List.Items[List.Selected]
+		local Volume = Item and Item.Volume
+		if (not Volume) then return "" end
+		return Volume.Side .. "  " .. Volume.Mount .. (Volume.ID and ("  id " .. Volume.ID) or "") .. (Volume.Label and ("  \"" .. Volume.Label .. "\"") or "")
+	end }))
+	local function SetMode(Mode)
+		local Item = List.Items[List.Selected]
+		if (not Item) then return end
+		local Warning = Volumes.ModeWarning(Item.Volume, Mode)
+		if (Warning and not Ui.Confirm("Disk", Warning, "Change")) then return end
+		Volumes.SetMode(Item.Volume.Key, Mode)
+		Log.Info("blockdrive", Item.Volume.Name .. " is now " .. ModeNames[Mode])
+		Build()
+	end
+	local ButtonY = Y + H - 1
+	Page:Add(Ui.Button.new({ X = X, Y = ButtonY, Text = " Pool ", OnClick = function() SetMode("pool") end }))
+	Page:Add(Ui.Button.new({ X = X + 7, Y = ButtonY, Text = " Own Share ", OnClick = function() SetMode("share") end }))
+	Page:Add(Ui.Button.new({ X = X + 19, Y = ButtonY, Text = " Unused ", OnClick = function() SetMode("off") end }))
+	Page:Add(Ui.Button.new({ X = X + 28, Y = ButtonY, Text = " Rename ", OnClick = function()
+		local Item = List.Items[List.Selected]
+		local Name = Item and Ui.Prompt("Rename disk", "Name (the share name when it has its own share):", Item.Volume.Name)
+		if (Name and Name ~= "" and Name ~= Item.Volume.Name) then
+			local Ok, Err = Volumes.Rename(Item.Volume.Key, Name)
+			if (not Ok) then Ui.Alert("Rename disk", Err) end
+			Build()
+		end
 	end }))
 end
 

@@ -8,6 +8,7 @@ local Clients = BlockOS.Require("server/clients")
 local Log = BlockOS.Require("server/log")
 local Rpc = BlockOS.Require("server/rpc")
 local Path = BlockOS.Require("cloud/path")
+local Volumes = BlockOS.Require("server/volumes")
 
 local Args = { ... }
 local Command = Args[1]
@@ -22,10 +23,15 @@ local function Usage()
 	print("  perm <n> read|write       change a client's access")
 	print("  remove <n>                unpair client n")
 	print("  restart <service>         restart a service")
+	print("  disks                     disk drives and how they are used")
+	print("  disk <n> pool|share|off   pool disk n, give it its own")
+	print("                            share, or leave it unused")
+	print("  disk <n> name <name>      rename disk n")
 	print("  logs [lines]              recent log lines")
 	print("  update [install]          check for (and install) updates")
 	print("  set <key> <value>         hostname, name, storage,")
-	print("                            quota, pairing, encrypt")
+	print("                            quota, pairing, encrypt,")
+	print("                            disks on|off, diskmode pool|share|off")
 	print("  password                  set the admin password")
 end
 
@@ -100,6 +106,36 @@ elseif (Command == "restart" and Args[2]) then
 	end
 	Manager.Restart(Args[2])
 	print("Restarted " .. Args[2] .. ".")
+elseif (Command == "disks") then
+	Volumes.Refresh()
+	local List = Volumes.List()
+	local Drive = Manager.Get("blockdrive")
+	if (Drive and Drive.Module.PoolSpace) then
+		local Free, Capacity, Pooled = Drive.Module.PoolSpace()
+		print("Pool: " .. Volumes.Primary() .. " + " .. Pooled .. " disks, " .. Free .. " of " .. tostring(Capacity) .. " bytes free")
+	end
+	if (#List == 0) then print("No disk drives with a disk.") end
+	for Index, Volume in ipairs(List) do
+		local Free = Volume.Mode ~= "off" and fs.exists(Volume.Root) and fs.getFreeSpace(Volume.Root) or nil
+		print(Index .. ". " .. Volume.Name .. "  " .. Volume.Mode .. "  " .. Volume.Side .. " " .. Volume.Mount .. (Free and ("  " .. Free .. " free") or ""))
+	end
+	if (Server.Settings().ShareDisks == false) then print("Disks are not used: bcloud set disks on") end
+elseif (Command == "disk" and Args[2] and Args[3]) then
+	Volumes.Refresh()
+	local Volume = Pick(Volumes.List(), Args[2])
+	if (not Volume) then return end
+	if (Args[3] == "name" and Args[4]) then
+		local Name = table.concat(Args, " ", 4)
+		local Ok, Err = Volumes.Rename(Volume.Key, Name)
+		if (Ok) then print("Disk " .. Volume.Name .. " is now called " .. Name .. ".") else printError(Err) end
+	elseif (Volumes.Modes[Args[3]]) then
+		local Warning = Volumes.ModeWarning(Volume, Args[3])
+		if (Warning) then print(Warning) end
+		Volumes.SetMode(Volume.Key, Args[3])
+		print("Disk " .. Volume.Name .. ": " .. ({ pool = "pooled", share = "shared on its own", off = "not used" })[Args[3]] .. ".")
+	else
+		Usage()
+	end
 elseif (Command == "logs") then
 	local Count = tonumber(Args[2]) or 15
 	for Index = math.max(1, #Log.Lines - Count + 1), #Log.Lines do
@@ -127,13 +163,17 @@ elseif (Command == "set" and Args[2] and Args[3]) then
 		Settings.StorageRoot = "/" .. fs.combine(Value, "")
 	elseif (Key == "quota") then
 		Settings.QuotaMB = tonumber(Value) or 0
-	elseif (Key == "pairing" or Key == "encrypt") then
-		Settings[Key == "pairing" and "PairingOpen" or "Encrypt"] = Value == "on" or Value == "true" or Value == "yes"
+	elseif (Key == "diskmode") then
+		if (not Volumes.Modes[Value]) then return printError("Use pool, share or off.") end
+		Settings.DiskMode = Value
+	elseif (Key == "pairing" or Key == "encrypt" or Key == "disks") then
+		Settings[({ pairing = "PairingOpen", encrypt = "Encrypt", disks = "ShareDisks" })[Key]] = Value == "on" or Value == "true" or Value == "yes"
 	else
 		return printError("Unknown setting " .. Key)
 	end
 	Server.Save()
 	if (Key == "storage") then Manager.Restart("blockdrive") end
+	if (Key == "disks") then Volumes.Refresh() os.queueEvent("blockcloud_storage") end
 	if (Key == "hostname" or Key == "encrypt") then Core().Announce() end
 	print("Saved.")
 elseif (Command == "password") then

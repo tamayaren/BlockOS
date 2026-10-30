@@ -45,11 +45,47 @@ servers, databases, Java services or extra mods.
 | Server | An **Advanced Computer** for the console. A basic computer also works: it runs the services with a text status screen and a shell (headless mode). |
 | Modem on the server | A **wireless modem** reaches about 64 blocks (more at high altitude). An **ender modem** reaches everywhere, including other dimensions, and is the easiest choice for a Data Center that serves the whole base. Wired modems and networking cable work too, for computers on the same cable network. |
 | Modem on clients | Any modem that can reach the server's modem. BlockOS Messages and Network use the same modems; BlockCloud uses its own rednet protocol names, so nothing interferes. |
-| Storage | Files are stored on the server computer's own disk, which CC: Tweaked limits to about **1 MB per computer** by default. To store more, raise `computer_space_limit` in the CC: Tweaked server config (on Aternos: *Files > config > computercraft-server.toml*) and restart the Minecraft server. A disk drive with a floppy can also be the storage location, but floppies hold only about 125 KB. |
+| Storage | The server's own disk (about **1 MB** by default in CC: Tweaked) plus **every disk drive attached to it**, directly or over **wired modems and networking cable** (100 drives on one server work). The disks are [pooled](#disk-drives-and-the-storage-pool) with the main storage, so each floppy adds about 125 KB to the same shares. To give the computer itself more room, raise `computer_space_limit` in the CC: Tweaked server config (on Aternos: *Files > config > computercraft-server.toml*) and restart the Minecraft server. |
 | HTTP | Needed only for installing and updating (enabled by default in CC: Tweaked). BlockDrive itself never uses HTTP. |
 
 Keep the Data Center in chunks that stay loaded while people play (see
 [Reliability on Aternos](#reliability-on-aternos)).
+
+### Disk drives and the storage pool
+
+Attach as many disk drives as you like, next to the server or on a wired modem network
+(connect each drive's wired modem with networking cable to a wired modem on the server and
+right-click the modems so they turn red). Put a floppy in each. Server Edition finds them by
+itself, also when drives or floppies are added or removed while it runs.
+
+Each disk is used in one of three ways (console **Settings > Disks**, or `bcloud disk`):
+
+| Mode | What clients see |
+| --- | --- |
+| **Pool** (default) | The disk adds its space to the main storage. Shares are the top-level folders of the whole pool, so `Shared` spans every pooled disk: 100 floppies add about 12 MB to one share. |
+| **Own share** | The disk is a separate share named after its label, or `Disk <ID>` (rename it in Settings > Disks). |
+| **Unused** | BlockDrive leaves the disk alone. |
+
+How the pool works:
+
+* Each file is stored whole on one disk: next to the other files in its folder if that disk has
+  room, otherwise on the disk with the most free space. **A single file can be at most as big
+  as the free space on one disk** (about 120 KB on a floppy); a bigger upload is refused with
+  *No single disk has room for a file this size*. Clients see the pool's total free space.
+* Folders can be spread over several disks; listing, renaming, copying and deleting them treats
+  them as one folder.
+* Everything BlockDrive stores on a disk is inside a `blockcloud` folder on it. Other files on
+  the disk are never shown or changed.
+* Disks are recognised by their floppy ID, so they keep their mode and name when they move to
+  another drive or the `diskN` mount names change after a restart.
+* Removing a pooled disk hides the files on it until it is put back (uploads to it are
+  stopped). Changing a disk that already holds files from Pool to another mode, or back, makes
+  its files show up somewhere else; the console and `bcloud` warn you first.
+* The main storage folder may itself be on a floppy (choose a disk during setup); that disk is
+  then the first part of the pool.
+
+Server Edition also turns off CraftOS's *boot from disk* (`shell.allow_disk_startup`), so a
+floppy with a `startup` file in one of the drives can never stop the server from booting.
 
 ## Installing Server Edition
 
@@ -164,6 +200,10 @@ bcloud clients
 bcloud perm 2 write              change client 2's access
 bcloud remove 2                  unpair client 2
 bcloud restart blockdrive        restart a service
+bcloud disks                     disk drives, their mode and free space, and the pool's total
+bcloud disk 3 share              disk 3 gets its own share (or: pool, off)
+bcloud disk 3 name Archive       rename disk 3
+bcloud set diskmode pool         how new disks are used; bcloud set disks off ignores all
 bcloud logs 30
 bcloud update install            check for and install an update
 bcloud set hostname rack1        also: name, storage, quota, pairing on|off, encrypt on|off
@@ -283,6 +323,9 @@ Server settings are stored in `/blockos/data/cloud/server.dat` and edited in **S
 | Storage | Location | `/blockcloud/storage` | Changing it restarts BlockDrive. Existing files are **not** moved. |
 | Storage | Quota MB | 0 (none) | Total size clients may store. |
 | Storage | Max file KB | 0 (none) | Largest single file. |
+| Disks | Use disk drives | on | Off ignores every disk drive. |
+| Disks | New disks | Pool | How a newly attached disk is used: Pool, Own share or Unused. |
+| Disks | Pool / Own Share / Unused / Rename | | Per disk; settings follow the floppy's ID. |
 | Security | Accept pairing requests | on | Turn off once everyone is paired. |
 | Security | Encrypt file transfers | on | ChaCha20 encryption of request and response bodies. Turning it off saves CPU. |
 | Security | Lock after | 10 min | Idle time before the console locks (needs a password). |
@@ -383,7 +426,10 @@ does not protect:
 | *The message could not be verified* | Keys no longer match (for example, data restored from a backup on one side). Forget the server and pair again. |
 | The code is refused | Type it exactly as shown (dash and case do not matter). Each request has its own code; if the client started again, use the new one. |
 | Pairing requests do not appear | *Accept pairing requests* must be on (Pairing tab or Settings > Security). |
-| *There is not enough storage space* | The computer's disk or the quota is full. Raise `computer_space_limit` in the CC: Tweaked config, or the quota in Settings > Storage. |
+| *There is not enough storage space* | The pool or the quota is full. Add disk drives (Settings > Disks shows each disk's free space), raise `computer_space_limit` in the CC: Tweaked config, or raise the quota in Settings > Storage. |
+| *No single disk has room for a file this size* | Files are not split across disks, so a file must fit on one disk (about 120 KB on a floppy). Use the server's own storage for big files, or raise `computer_space_limit`. |
+| A disk drive is not used | Does it hold a floppy (music discs are ignored)? Is the drive's wired modem switched on (red) and cabled to the server's wired modem? Check **Settings > Disks** and `bcloud disks`. |
+| Files disappeared after removing a disk | They are still on the floppy; put it back (in any drive) and they reappear. |
 | *That file is too large* | Settings > Storage > Max file KB. |
 | *You do not have permission* | The client is read-only; change it under Clients. |
 | Updates fail | HTTP must be enabled in CC: Tweaked. Settings > Updates shows the last error; the channel must end with `/server/`. |
@@ -436,6 +482,9 @@ BlockDrive operations: `info`, `list`, `stat`, `download_begin/chunk/end` (read)
 `mkdir`, `delete`, `move`, `copy`, `upload_begin/chunk/commit/abort` (write). Files move in
 8 KB chunks; each upload chunk is acknowledged with the next expected index, so a lost
 acknowledgement just makes the client resend and the server re-acknowledge.
+
+`info` also returns `Volumes` (each share's kind, free space, largest storable file and number
+of disks), `PooledDisks` and `Largest`; clients that ignore them keep working.
 
 Error codes and their messages are listed in `protocol.lua` (`Protocol.Errors`).
 
@@ -492,6 +541,12 @@ rednet that computers run in-game) with a simulated wireless network, using the 
 each installer ships:
 
 * Unit tests of the codec, path validation, keys, signatures and ChaCha20 (RFC 7539 vector).
+* Disk pooling with simulated disk drives and a simulated wired modem that the real CC
+  `peripheral` and `disk` APIs talk to (as in-game, drives appear as `drive_0`, `drive_1`, ...):
+  files spread over floppies, folders spanning disks renamed, copied and deleted, an overwrite
+  that moves to another disk, a disk on its own share, ejecting and reinserting a pooled disk,
+  and a rack of **100 drives** on one wired modem (4 MB stored over 40 floppies; info about
+  0.2 s and listing about 0.15 s on this machine).
 * The milestone's vertical slice on separate computers: discovery, pairing with a code (and a
   wrong code), upload, remote read, edit and save, folders, rename, copy, move, delete,
   download, path traversal attempts, forged and replayed requests, an interrupted upload,
@@ -507,7 +562,7 @@ each installer ships:
   server (identity and files kept), and the BlockDrive client installer.
 
 **Not tested in a Minecraft world.** These need checking in-game: real wireless, ender and
-wired modem ranges; chunk unloading and Aternos shutdowns (simulated here by powering the
+wired modem ranges; real disk drives and wired modem cabling; chunk unloading and Aternos shutdowns (simulated here by powering the
 computer off); the Minecraft server's CPU budget with many clients; HTTP to GitHub from
 Aternos; disk drives as the storage location; and screen sizes other than the standard
 51x19 computer terminal.
