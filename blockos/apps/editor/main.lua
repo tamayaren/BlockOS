@@ -3,6 +3,7 @@
 local Ui = BlockOS.Require("ui")
 local Gfx = BlockOS.Require("gfx")
 local Config = BlockOS.Require("config")
+local Apps = BlockOS.Require("apps")
 
 local Args = { ... }
 
@@ -581,6 +582,10 @@ end
 
 local function FileMenu()
 	local Options = { "New", "Open...", "Save", "Save As...", "-", "Run", "-", "Close" }
+	local OnDesktop = Doc.Path and Apps.HasShortcut(Doc.Path)
+	if (Doc.Path) then
+		table.insert(Options, 7, OnDesktop and "Remove from Desktop" or "Add to Desktop")
+	end
 	local Choice = Options[Ui.ContextMenu(1, 2, Options) or 0]
 	if (Choice == "New") then
 		NewDocument()
@@ -592,6 +597,8 @@ local function FileMenu()
 		if (SaveAs()) then Save() end
 	elseif (Choice == "Run") then
 		Run()
+	elseif (Choice == "Add to Desktop" or Choice == "Remove from Desktop") then
+		Apps.SetShortcut(Doc.Path, not OnDesktop)
 	elseif (Choice == "Close") then
 		Close()
 	end
