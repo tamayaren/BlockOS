@@ -474,6 +474,8 @@ local function OpenFile(Path)
 		Launch("recorder", { Path })
 	elseif (Extension == "txt" and AppCache.notes) then
 		Launch("notes", { Path })
+	elseif ((Extension == "bimg" or Extension == "nfp") and AppCache.brocreate) then
+		Launch("brocreate", { Path })
 	elseif (Extension == "lua" or not Extension) then
 		Launch(Path, {}, { Hold = true })
 	else
@@ -622,7 +624,7 @@ end
 
 local function DrawWallpaper()
 	local Settings = Config.Settings()
-	local Rows = Wallpaper.Render(Settings.Wallpaper, ScreenW, ScreenH, Settings.WallpaperColor)
+	local Rows = Wallpaper.Render(Settings.Wallpaper, ScreenW, ScreenH, Settings.WallpaperColor, Settings.WallpaperImage)
 	for Y = 1, ScreenH do
 		Screen.setCursorPos(1, Y)
 		Screen.blit(Rows[Y][1], Rows[Y][2], Rows[Y][3])

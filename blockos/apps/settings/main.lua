@@ -148,6 +148,10 @@ function Builders.appearance(X, Y, W, H)
 		table.insert(Items, { Text = Entry.Name, ID = Entry.ID })
 		if (Entry.ID == Settings.Wallpaper) then Selected = Index end
 	end
+	if (Settings.WallpaperImage) then
+		table.insert(Items, { Text = Wallpaper.Picture.Name, ID = Wallpaper.Picture.ID })
+		if (Settings.Wallpaper == Wallpaper.Picture.ID) then Selected = #Items end
+	end
 	local ListW = math.min(14, W - 2)
 	local ListH = math.max(2, math.min(#Items, H - 6))
 	local List = Page:Add(Ui.List.new({ X = X, Y = Y + 5, W = ListW, H = ListH, Items = Items, Bg = "Panel" }))
@@ -161,7 +165,7 @@ function Builders.appearance(X, Y, W, H)
 		Page:Add(Ui.Canvas.new({
 			X = X + ListW + 1, Y = Y + 5, W = PreviewW, H = ListH,
 			OnDraw = function(Self, T)
-				Wallpaper.Draw(T, Self.X, Self.Y, Self.W, Self.H, Settings.Wallpaper, Settings.WallpaperColor)
+				Wallpaper.Draw(T, Self.X, Self.Y, Self.W, Self.H, Settings.Wallpaper, Settings.WallpaperColor, Settings.WallpaperImage)
 			end
 		}))
 	end
