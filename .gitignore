@@ -2,3 +2,7 @@ blockos/data/
 blockos/userapps/
 blockos/.update/
 __pycache__/
+tests/harness/lib/
+tests/harness/jdk/
+tests/harness/build/
+tests/out/
