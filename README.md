@@ -45,17 +45,18 @@ turtle over rednet (basic turtles get the agent automatically).
 | Menu bar | Block logo menu (About, Settings, App Store, Force Quit, Lock, Log Out, Restart, Shut Down), the app's name, **Go** and **Window** menus, an update arrow when one is available, and the clock. |
 | Dock | Pinned apps, running apps (dot underneath) and a Messages unread badge. Right-click an icon to open, quit, or keep it in the dock. Small (2 rows, the default) or large, solid or clear (no background, just the icons and running dots) in **Settings → Dock**. |
 | Windows | Drag the title bar to move, drag the bottom-right corner to resize. Red closes, yellow minimizes, green goes full screen. |
-| Full screen | Hides the dock and menu bar like macOS. Scroll up on the top row, or press Ctrl+Shift+Up, to reveal the menu bar. |
+| Full screen | Hides the dock and menu bar like macOS. Click the top-left corner, right-click or scroll up on the top row, or press Ctrl+Shift+Up to show the menu bar and the window buttons (close, minimize, exit full screen). |
 | Launchpad | Every app in a searchable grid. Type to search, scroll for more pages. |
 | Desktop | Right-click for New Terminal, Finder, Change Wallpaper, Settings. |
 | Lock screen | Date and a large clock over an animated screensaver, your name and a password field. The button in the bottom-right corner restarts or shuts down. Pick the screensaver colours in **Settings → Lock Screen** (your accent colour by default). |
 
 ### Animations
 
-Windows open out of their dock icon and minimize back into it, notifications
-slide in from the right, locking and unlocking fade the screen, and restarting
-shows a boot screen with the logo and a loading bar. Turn animations off in
-**Settings → Dock** if your server is slow.
+Windows open out of their dock icon and minimize back into it, Launchpad
+zooms open, menus and right-click menus unroll, notifications slide in from the
+right, the lock screen bleeds in over the desktop (and the desktop back in when
+you unlock), and restarting shows a boot screen with the logo and a loading
+bar. Turn animations off in **Settings → Dock** if your server is slow.
 
 ### Keyboard shortcuts
 
@@ -80,6 +81,8 @@ shows a boot screen with the logo and a loading bar. Turn animations off in
 | **App Store** | Browse catalogs, install apps from Pastebin or any URL, and manage installed apps. |
 | **Messages** | Encrypted chat rooms and direct messages between BlockOS computers over rednet (needs a modem). |
 | **Notes** | Quick notes with word wrap, bullet lists and autosave, stored in `/home/Notes`. Opens `.txt` files from Finder. |
+| **Print** | Print text files on an attached printer, with a page preview, page titles, copies, and ink and paper levels. Right-click a `.txt` file in Finder and choose **Print**, or use Print in Notes. |
+| **Network** | Finds nearby BlockOS computers over a wireless or ender modem and, with a GPS cluster in range, shows them on a map with distance and direction. Turn off *Let other computers find this one* (also in **Settings → Network**) to stay hidden. |
 | **bTunes** | Music player for speakers: search YouTube or paste a YouTube video or playlist link, play DFPWM links and `.dfpwm` files, and keep a library with shuffle, repeat and a visualizer. |
 | **Settings** | General, Appearance (theme, accent, wallpaper incl. dark ones and a solid colour, white and black included), Dock (size, style, animations), Lock Screen, Users & Login, Notifications, Network, Login Items, Software Update. |
 | **Clock** | Large clock (real or Minecraft time), alarms, stopwatch and timer. |
