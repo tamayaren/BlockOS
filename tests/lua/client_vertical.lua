@@ -99,6 +99,14 @@ T.Run(function()
 	local Back = Drive.ReadText(Server, "Shared/blob.bin")
 	T.Check("download 40 KB binary intact (" .. (os.epoch("utc") - Started) .. " ms)", Back == Binary)
 
+	-- Limits: bigger than the server's disk, and bigger than the admin's per-file limit.
+	local Huge, HugeErr = Drive.WriteText(Server, "Shared/huge.bin", ("x"):rep(2500000))
+	T.ExpectError("upload larger than the disk refused", "no_space", Huge, HugeErr)
+	T.Admin(1, { Op = "set", Key = "MaxFileKB", Value = 10 })
+	local Big, BigErr = Drive.WriteText(Server, "Shared/big.txt", ("y"):rep(20000))
+	T.ExpectError("upload over the file size limit refused", "too_large", Big, BigErr)
+	T.Admin(1, { Op = "set", Key = "MaxFileKB", Value = 0 })
+
 	-- An upload that stops half way leaves the existing file untouched.
 	local Begin = Client.Call(Server, "blockdrive", "upload_begin", { Path = "Shared/docs/report.txt", Size = 20000, Sum = 1, Overwrite = true })
 	local Chunk = Client.Call(Server, "blockdrive", "upload_chunk", { Transfer = Begin.Transfer, Index = 1, Data = ("z"):rep(8192), Sum = Codec.Adler32(("z"):rep(8192)) })
