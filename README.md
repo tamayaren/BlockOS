@@ -36,18 +36,26 @@ program that lets the Turtles app on a BlockOS computer pair with and drive the
 turtle over rednet (basic turtles get the agent automatically).
 
 > HTTP must be enabled on the server (it is by default) for installing,
-> updates, the App Store, Pastebin installs and MusicStream.
+> updates, the App Store, Pastebin installs and bTunes.
 
 ## The desktop
 
 | Area | What it does |
 | --- | --- |
 | Menu bar | Block logo menu (About, Settings, App Store, Force Quit, Lock, Log Out, Restart, Shut Down), the app's name, **Go** and **Window** menus, an update arrow when one is available, and the clock. |
-| Dock | Pinned apps, running apps (dot underneath) and a Messages unread badge. Right-click an icon to open, quit, or keep it in the dock. |
+| Dock | Pinned apps, running apps (dot underneath) and a Messages unread badge. Right-click an icon to open, quit, or keep it in the dock. Small (2 rows, the default) or large, solid or clear (no background, just the icons and running dots) in **Settings → Dock**. |
 | Windows | Drag the title bar to move, drag the bottom-right corner to resize. Red closes, yellow minimizes, green goes full screen. |
 | Full screen | Hides the dock and menu bar like macOS. Scroll up on the top row, or press Ctrl+Shift+Up, to reveal the menu bar. |
 | Launchpad | Every app in a searchable grid. Type to search, scroll for more pages. |
 | Desktop | Right-click for New Terminal, Finder, Change Wallpaper, Settings. |
+| Lock screen | Date and a large clock over an animated screensaver, your name and a password field. The button in the bottom-right corner restarts or shuts down. Pick the screensaver colours in **Settings → Lock Screen** (your accent colour by default). |
+
+### Animations
+
+Windows open out of their dock icon and minimize back into it, notifications
+slide in from the right, locking and unlocking fade the screen, and restarting
+shows a boot screen with the logo and a loading bar. Turn animations off in
+**Settings → Dock** if your server is slow.
 
 ### Keyboard shortcuts
 
@@ -71,14 +79,22 @@ turtle over rednet (basic turtles get the agent automatically).
 | **Editor** | Code editor with Lua syntax highlighting, selection, undo/redo, find/replace, go to line, and Run (F5). |
 | **App Store** | Browse catalogs, install apps from Pastebin or any URL, and manage installed apps. |
 | **Messages** | Encrypted chat rooms and direct messages between BlockOS computers over rednet (needs a modem). |
-| **MusicStream** | Stream DFPWM audio from URLs to a speaker, with a library, shuffle, repeat and a visualizer. Also plays `.dfpwm` files. |
-| **Settings** | General, Appearance (theme, accent, wallpaper), Dock, Users & Login, Notifications, Network, Login Items, Software Update. |
+| **Notes** | Quick notes with word wrap, bullet lists and autosave, stored in `/home/Notes`. Opens `.txt` files from Finder. |
+| **bTunes** | Music player for speakers: search YouTube or paste a YouTube video or playlist link, play DFPWM links and `.dfpwm` files, and keep a library with shuffle, repeat and a visualizer. |
+| **Settings** | General, Appearance (theme, accent, wallpaper incl. dark ones and a solid colour, white and black included), Dock (size, style, animations), Lock Screen, Users & Login, Notifications, Network, Login Items, Software Update. |
 | **Clock** | Large clock (real or Minecraft time), alarms, stopwatch and timer. |
 | **Reminders** | Lists, smart lists (Today, Scheduled, All, Completed) and due times like `in 10m`, `14:30` or `tomorrow 9:00`. |
 | **Turtles** | Pair with turtles running the agent; view inventory, fuel and position, drive them, and run programs remotely. |
 | **DiskCopy** | Duplicate, back up, restore, erase and label floppy disks, or make a BlockOS installer disk. |
 | **Devices** | Inspect this computer and every attached peripheral; toggle redstone outputs. |
 | **Recorder** | Record the screen to `.rec` files, play them back, and export a standalone player. |
+
+### YouTube in bTunes
+
+YouTube audio is converted to DFPWM by the community server that Minux and the
+iPod program use (`ipod-2to6magyna-uc.a.run.app`). BlockOS has no affiliation
+with it, and it can be slow or offline at times. To use another server with the
+same API, go to **bTunes → Add → Server**.
 
 ## Installing apps
 

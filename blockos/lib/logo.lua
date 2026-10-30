@@ -13,6 +13,8 @@ local Legend = {
 	x = { "'", colors.orange, colors.brown }
 }
 
+Logo.Legend = Legend
+
 Logo.Big = {
 	"GgGGGvGGGGgGGGvG",
 	"GGDGGGGDGGGvG   ",

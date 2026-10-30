@@ -1,4 +1,4 @@
--- MusicStream: streams DFPWM audio from URLs or disk to every attached speaker.
+-- bTunes: plays YouTube, DFPWM links and files on disk through every attached speaker.
 
 local Ui = BlockOS.Require("ui")
 local Gfx = BlockOS.Require("gfx")
@@ -11,11 +11,25 @@ local Args = { ... }
 local LibraryPath = "/blockos/data/music.dat"
 local ChunkSize = 16 * 1024
 local BytesPerSecond = 6000
+-- Community server that converts YouTube audio to DFPWM (the same one Minux and iPod use).
+local DefaultServer = "https://ipod-2to6magyna-uc.a.run.app/"
+local ApiVersion = "2.1"
 
 local Library = Config.Read(LibraryPath) or { Tracks = {} }
 local Page = Ui.Page.new()
 local Tab = 1
 local Build
+local SearchField
+
+local Search = {
+	Query = "",
+	Results = {},
+	State = "idle",
+	RequestUrl = nil,
+	Error = nil
+}
+-- Title lookups for pasted YouTube links, keyed by request URL.
+local Lookups = {}
 
 local Player = {
 	Queue = {},
@@ -43,6 +57,30 @@ end
 
 local function SaveLibrary()
 	Config.Write(LibraryPath, Library)
+end
+
+local function Server()
+	local Url = Library.Server or DefaultServer
+	if (Url:sub(-1) ~= "/") then Url = Url .. "/" end
+	return Url
+end
+
+local function StreamUrl(ID)
+	return Server() .. "?v=" .. ApiVersion .. "&id=" .. textutils.urlEncode(ID)
+end
+
+local function SearchUrl(Query)
+	return Server() .. "?v=" .. ApiVersion .. "&search=" .. textutils.urlEncode(Query)
+end
+
+-- Returns the video ID of a YouTube link, or nil for anything else.
+local function YouTubeID(Link)
+	if (not Link:match("youtube%.com") and not Link:match("youtu%.be")) then return nil end
+	return Link:match("youtu%.be/([%w_%-]+)") or Link:match("[?&]v=([%w_%-]+)") or Link:match("/shorts/([%w_%-]+)") or Link:match("/live/([%w_%-]+)")
+end
+
+local function IsYouTubePlaylist(Link)
+	return (Link:match("youtube%.com") and Link:match("[?&]list=") and not YouTubeID(Link)) and true or false
 end
 
 local function FormatTime(Seconds)
@@ -153,7 +191,7 @@ function Play(Index)
 	if (not Track) then return end
 	Player.Index = Index
 	Player.Error = nil
-	BlockOS.SetTitle("MusicStream \7 " .. Track.Name)
+	BlockOS.SetTitle("bTunes \7 " .. Track.Name)
 	if (Track.Path) then
 		local Handle = fs.open(Track.Path, "rb")
 		if (not Handle) then
@@ -167,9 +205,10 @@ function Play(Index)
 		Player.Error = "HTTP is disabled"
 		return
 	end
+	local Url = Track.ID and StreamUrl(Track.ID) or Track.Url
 	Player.State = "loading"
-	Player.RequestUrl = Track.Url
-	http.request({ url = Track.Url, binary = true })
+	Player.RequestUrl = Url
+	http.request({ url = Url, binary = true })
 end
 
 local function PlayList(Tracks, Start)
@@ -197,6 +236,83 @@ local function Previous()
 	end
 end
 
+local function ResultTrack(Item)
+	return { Name = tostring(Item.name or "Untitled"), Artist = Item.artist and tostring(Item.artist) or nil, ID = tostring(Item.id) }
+end
+
+local function RunSearch(Query)
+	Query = (Query or ""):gsub("^%s+", ""):gsub("%s+$", "")
+	if (#Query == 0) then return end
+	if (not http) then
+		Search.Error = "HTTP is disabled"
+		Build()
+		return
+	end
+	Search.Query = Query
+	Search.Results = {}
+	Search.Error = nil
+	Search.State = "searching"
+	Search.RequestUrl = SearchUrl(Query)
+	http.request(Search.RequestUrl)
+	Build()
+end
+
+local function SearchDone(Handle)
+	local Body = Handle.readAll()
+	pcall(Handle.close)
+	Search.State = "idle"
+	local Parsed, Results = pcall(textutils.unserialiseJSON, Body or "")
+	if (not Parsed or type(Results) ~= "table") then
+		Search.Error = "The YouTube server sent an unexpected reply"
+		return
+	end
+	Search.Results = {}
+	for _, Item in ipairs(Results) do
+		if (type(Item) == "table" and Item.id) then
+			local Entry = { Name = tostring(Item.name or "Untitled"), Artist = Item.artist and tostring(Item.artist) or nil }
+			if (Item.type == "playlist" and type(Item.playlist_items) == "table") then
+				Entry.Tracks = {}
+				for _, Song in ipairs(Item.playlist_items) do
+					if (type(Song) == "table" and Song.id) then table.insert(Entry.Tracks, ResultTrack(Song)) end
+				end
+			else
+				Entry.ID = tostring(Item.id)
+			end
+			table.insert(Search.Results, Entry)
+		end
+	end
+	if (#Search.Results == 0) then Search.Error = "No results for \"" .. Search.Query .. "\"" end
+end
+
+-- Asks the server for the real title of a pasted YouTube link.
+local function LookupTitle(Track)
+	if (not http) then return end
+	local Url = SearchUrl("https://youtu.be/" .. Track.ID)
+	Lookups[Url] = Track
+	http.request(Url)
+end
+
+local function LookupDone(Track, Handle)
+	local Body = Handle.readAll()
+	pcall(Handle.close)
+	local Parsed, Results = pcall(textutils.unserialiseJSON, Body or "")
+	if (not Parsed or type(Results) ~= "table" or type(Results[1]) ~= "table") then return end
+	local Match = Results[1]
+	for _, Item in ipairs(Results) do
+		if (type(Item) == "table" and tostring(Item.id) == Track.ID) then Match = Item end
+	end
+	if (not Match.name) then return end
+	Track.Name = tostring(Match.name)
+	Track.Artist = Match.artist and tostring(Match.artist) or nil
+	SaveLibrary()
+end
+
+-- The tracks a search result stands for: one song, or every song of a playlist.
+local function ResultTracks(Entry)
+	if (Entry.Tracks) then return Entry.Tracks end
+	return { { Name = Entry.Name, Artist = Entry.Artist, ID = Entry.ID } }
+end
+
 local function LocalFiles()
 	local Files = {}
 	local Folders = { "/home/Music", "/home/Downloads" }
@@ -221,7 +337,8 @@ local function TrackList(Y, H, Tracks, Removable)
 	local Items = {}
 	for Index, Track in ipairs(Tracks) do
 		local Playing = Player.Queue[Player.Index] == Track and Player.State ~= "stopped"
-		table.insert(Items, { Text = Track.Name, Icon = Playing and "\16" or "\14", IconFg = Playing and "Accent" or "SubText", Right = Track.Path and "disk" or "web", Index = Index })
+		local Source = Track.Path and "disk" or (Track.ID and "yt" or "web")
+		table.insert(Items, { Text = Track.Name, Icon = Playing and "\16" or "\14", IconFg = Playing and "Accent" or "SubText", Right = Source, Index = Index })
 	end
 	local List = Page:Add(Ui.List.new({ X = 1, Y = Y, W = Page.W, H = H, Items = Items }))
 	List.OnActivate = function(_, Index) PlayList(Tracks, Index) end
@@ -252,8 +369,70 @@ local function TrackList(Y, H, Tracks, Removable)
 	end
 	if (#Items == 0) then
 		Page:Add(Ui.Label.new({ X = 2, Y = Y + 1, W = Page.W - 2, H = 2, Fg = "SubText",
-			Text = Removable and "Your library is empty. Add a DFPWM link in the Add tab." or "No .dfpwm files in Music, Downloads or disks." }))
+			Text = Removable and "Your library is empty. Find songs in Search or add a link in Add." or "No .dfpwm files in Music, Downloads or disks." }))
 	end
+end
+
+local function BuildSearch(Y, H)
+	local W = Page.W
+	SearchField = Page:Add(Ui.Input.new({ X = 1, Y = Y, W = W - 9, Placeholder = "Search YouTube or paste a link" }))
+	SearchField:SetValue(Search.Query)
+	SearchField.OnSubmit = function(_, Value) RunSearch(Value) end
+	Page:Add(Ui.Button.new({ X = W - 8, Y = Y, W = 9, Text = "Search", Style = "primary", OnClick = function() RunSearch(SearchField.Value) end }))
+	local Items = {}
+	for Index, Entry in ipairs(Search.Results) do
+		local Text = Entry.Name
+		if (Entry.Artist and #Entry.Artist > 0) then Text = Text .. " \7 " .. Entry.Artist end
+		table.insert(Items, { Text = Text, Icon = Entry.Tracks and "\19" or "\14", IconFg = "SubText", Right = Entry.Tracks and (#Entry.Tracks .. " songs") or "yt", Index = Index })
+	end
+	local List = Page:Add(Ui.List.new({ X = 1, Y = Y + 1, W = W, H = H - 1, Items = Items }))
+	List.OnActivate = function(_, Index)
+		local Entry = Search.Results[Index]
+		if (not Entry) then return end
+		if (Entry.Tracks) then
+			PlayList(Entry.Tracks, 1)
+			return
+		end
+		-- Queue the other songs too so next/previous keep working.
+		local Queue = {}
+		local Start = 1
+		for Other, Result in ipairs(Search.Results) do
+			if (Result.ID) then
+				table.insert(Queue, ResultTracks(Result)[1])
+				if (Other == Index) then Start = #Queue end
+			end
+		end
+		PlayList(Queue, Start)
+	end
+	List.OnContext = function(_, Index, Item, X, CY)
+		if (not Item) then return end
+		local Entry = Search.Results[Index]
+		local Options = { "Play", "Play Next", "Add to Library" }
+		local Choice = Options[Ui.ContextMenu(X, CY, Options) or 0]
+		if (Choice == "Play") then
+			PlayList(ResultTracks(Entry), 1)
+		elseif (Choice == "Play Next") then
+			for Offset, Track in ipairs(ResultTracks(Entry)) do
+				table.insert(Player.Queue, math.min(#Player.Queue + 1, Player.Index + Offset), Track)
+			end
+		elseif (Choice == "Add to Library") then
+			for _, Track in ipairs(ResultTracks(Entry)) do
+				table.insert(Library.Tracks, Track)
+			end
+			SaveLibrary()
+			BlockOS.Notify("bTunes", "Added " .. Entry.Name .. " to your library")
+		end
+	end
+	local Message = Search.Error
+	if (Search.State == "searching") then
+		Message = "Searching..."
+	elseif (#Items == 0 and not Message) then
+		Message = "Type a song, artist or YouTube link and press Enter."
+	end
+	if (Message) then
+		Page:Add(Ui.Label.new({ X = 2, Y = Y + 2, W = W - 2, H = 2, Fg = "SubText", Text = Message }))
+	end
+	Page:SetFocus(SearchField)
 end
 
 local function NowPlaying(Y)
@@ -323,7 +502,7 @@ local function Visualizer(Y, H)
 				end
 			end
 			if (Count == 0 or Player.State ~= "playing") then
-				Gfx.Center(T, Self.Y + math.floor(Self.H / 2), (#Speakers() == 0) and "Attach a speaker to play music" or "\14 MusicStream", Th.SubText, Th.WindowBg, Self.X, Self.W)
+				Gfx.Center(T, Self.Y + math.floor(Self.H / 2), (#Speakers() == 0) and "Attach a speaker to play music" or "\14 bTunes", Th.SubText, Th.WindowBg, Self.X, Self.W)
 			end
 		end
 	}))
@@ -334,13 +513,25 @@ local function BuildAdd(Y)
 	Page:Add(Ui.Label.new({ X = 2, Y = Y, Text = "Name" }))
 	local Name = Page:Add(Ui.Input.new({ X = 8, Y = Y, W = FieldW, Placeholder = "Track name" }))
 	Page:Add(Ui.Label.new({ X = 2, Y = Y + 2, Text = "URL" }))
-	local Url = Page:Add(Ui.Input.new({ X = 8, Y = Y + 2, W = FieldW, Placeholder = "https://.../song.dfpwm" }))
-	Page:Add(Ui.Label.new({ X = 2, Y = Y + 4, W = Page.W - 2, H = 2, Fg = "SubText", Text = "Links must point to DFPWM audio. Convert music at music.madefor.cc or with ffmpeg." }))
+	local Url = Page:Add(Ui.Input.new({ X = 8, Y = Y + 2, W = FieldW, Placeholder = "YouTube or .dfpwm link" }))
+	Page:Add(Ui.Label.new({ X = 2, Y = Y + 4, W = Page.W - 2, H = 2, Fg = "SubText", Text = "Paste a YouTube video or a link to DFPWM audio. Playlists open in Search." }))
 	local function Track()
 		local Link = Url.Value:gsub("^%s+", ""):gsub("%s+$", "")
 		if (not Link:match("^https?://")) then
-			Ui.Alert("MusicStream", "Enter an http(s) link.")
+			Ui.Alert("bTunes", "Enter an http(s) link.")
 			return nil
+		end
+		if (IsYouTubePlaylist(Link)) then
+			Tab = 2
+			RunSearch(Link)
+			return nil
+		end
+		local ID = YouTubeID(Link)
+		if (ID) then
+			if (#Name.Value > 0) then return { Name = Name.Value, ID = ID } end
+			local Entry = { Name = "YouTube " .. ID, ID = ID }
+			LookupTitle(Entry)
+			return Entry
 		end
 		local Title = (#Name.Value > 0) and Name.Value or (Link:match("([^/]+)%.%w+$") or Link)
 		return { Name = Title, Url = Link }
@@ -359,6 +550,13 @@ local function BuildAdd(Y)
 		Tab = 1
 		Build()
 	end }))
+	Page:Add(Ui.Button.new({ X = math.max(32, Page.W - 8), Y = Y + 7, Text = " Server ", OnClick = function()
+		local Value = Ui.Prompt("YouTube Server", "Streaming server URL:", Server())
+		if (not Value) then return end
+		Value = Value:gsub("^%s+", ""):gsub("%s+$", "")
+		Library.Server = (#Value > 0 and Value ~= DefaultServer) and Value or nil
+		SaveLibrary()
+	end }))
 	Page:SetFocus(Url)
 end
 
@@ -366,7 +564,7 @@ function Build()
 	Page:Clear()
 	local W, H = Page.W, Page.H
 	Page:Add(Ui.Tabs.new({
-		X = 1, Y = 1, W = W, Items = { "Library", "Files", "Add", "Visual" }, Selected = Tab,
+		X = 1, Y = 1, W = W, Items = { "Library", "Search", "Files", "Add", "Visual" }, Selected = Tab,
 		OnChange = function(_, Index)
 			Tab = Index
 			Build()
@@ -376,13 +574,15 @@ function Build()
 	if (Tab == 1) then
 		TrackList(2, BodyH, Library.Tracks, true)
 	elseif (Tab == 2) then
+		BuildSearch(2, BodyH)
+	elseif (Tab == 3) then
 		local Files = LocalFiles()
 		TrackList(2, BodyH - 1, Files, false)
 		Page:Add(Ui.Button.new({ X = W - 9, Y = H - 3, W = 9, Text = "Open...", OnClick = function()
 			local Path = Ui.PickFile({ Dir = "/home/Music", Extension = ".dfpwm" })
 			if (Path) then PlayList({ { Name = fs.getName(Path), Path = Path } }, 1) end
 		end }))
-	elseif (Tab == 3) then
+	elseif (Tab == 4) then
 		BuildAdd(3)
 	else
 		Visualizer(2, BodyH)
@@ -409,8 +609,27 @@ function Page:OnEvent(Name, A, B)
 		Player.State = "stopped"
 		Player.Error = "Could not load track"
 		return true
-	elseif (Name == "peripheral" or Name == "peripheral_detach" or Name == "disk" or Name == "disk_eject") then
+	elseif ((Name == "http_success" or Name == "http_failure") and Lookups[A]) then
+		local Track = Lookups[A]
+		Lookups[A] = nil
+		if (Name == "http_success") then
+			LookupDone(Track, B)
+			Build()
+		end
+		return true
+	elseif (Name == "http_success" and A == Search.RequestUrl) then
+		Search.RequestUrl = nil
+		SearchDone(B)
 		if (Tab == 2) then Build() end
+		return true
+	elseif (Name == "http_failure" and A == Search.RequestUrl) then
+		Search.RequestUrl = nil
+		Search.State = "idle"
+		Search.Error = "Search failed: " .. tostring(B or "no connection")
+		if (Tab == 2) then Build() end
+		return true
+	elseif (Name == "peripheral" or Name == "peripheral_detach" or Name == "disk" or Name == "disk_eject") then
+		if (Tab == 3) then Build() end
 		return true
 	elseif (Name == "blockos_open" and A) then
 		PlayList({ { Name = fs.getName(A), Path = A } }, 1)
@@ -429,7 +648,7 @@ end
 
 Page:SetInterval(.25, function()
 	Player.Tick = Player.Tick + 1
-	return Player.State ~= "stopped" or Tab == 4
+	return Player.State ~= "stopped" or Tab == 5
 end)
 
 if (Args[1] and fs.exists(Args[1])) then

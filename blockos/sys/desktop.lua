@@ -12,8 +12,8 @@ local Login = BlockOS.Load("/blockos/sys/login.lua")
 
 local Desktop = {}
 
-local DockH = 3
 local MinW, MinH = 14, 4
+local FrameTime = .05
 local LogPath = "/blockos/data/log.txt"
 
 local Native, Screen, Hidden
@@ -47,6 +47,11 @@ local TopbarRegions = {}
 local DockRegions = {}
 local LastTitleClick = { Time = 0 }
 local Recording = false
+local AnimationQueue = {}
+local Deferred = {}
+local Ghost = nil
+local PendingLock = false
+local PendingUnlock = false
 
 local Redraw, ScheduleRedraw, Focus, Launch, Notify, Lock, CloseProc, Kill, OpenMenu, Multishell
 
@@ -80,13 +85,36 @@ local function RefreshApps()
 	AppCache = Apps.All()
 end
 
+-- The small dock shows one row of icons with the running indicator below it.
+local function DockHeight()
+	return (Config.Settings().DockSize == "large") and 3 or 2
+end
+
 local function DockTop()
-	return ScreenH - DockH + 1
+	return ScreenH - DockHeight() + 1
 end
 
 -- Usable window area between the topbar and dock: X, Y, W, H.
 local function WorkArea()
-	return 1, 2, ScreenW, ScreenH - DockH - 1
+	return 1, 2, ScreenW, ScreenH - DockHeight() - 1
+end
+
+local function AnimationsEnabled()
+	return Config.Settings().Animations ~= false
+end
+
+-- Animations run from the desktop's main loop, never inside an app's coroutine.
+local function QueueAnimation(Animation)
+	if (not AnimationsEnabled()) then return false end
+	table.insert(AnimationQueue, Animation)
+	return true
+end
+
+local function WindowRect(Proc)
+	if (Proc.Fullscreen) then
+		return { 1, 1, ScreenW, ScreenH }
+	end
+	return { Proc.X, Proc.Y, Proc.W, Proc.H }
 end
 
 local function FocusedFullscreen()
@@ -312,6 +340,9 @@ local function Spawn(Opts)
 	Proc.Redirect = Proc.Term
 	Proc.Co = coroutine.create(Opts.Fn)
 	table.insert(Processes, Proc)
+	if (QueueAnimation({ Kind = "open", Proc = Proc, From = Opts.From })) then
+		Proc.Opening = true
+	end
 	Focus(Proc)
 	return Proc
 end
@@ -370,6 +401,7 @@ function Launch(Target, Args, Opts)
 			Width = App.Width,
 			Height = App.Height,
 			AllowTitle = App.AllowTitle,
+			From = Opts.From,
 			Fn = ProgramFn(App.Path, Args, false)
 		})
 		return Proc.ID
@@ -399,9 +431,11 @@ local function OpenFile(Path)
 	local Extension = Path:match("%.([%w]+)$")
 	Extension = Extension and Extension:lower()
 	if (Extension == "dfpwm") then
-		Launch("musicstream", { Path })
+		Launch("btunes", { Path })
 	elseif (Extension == "rec") then
 		Launch("recorder", { Path })
+	elseif (Extension == "txt" and AppCache.notes) then
+		Launch("notes", { Path })
 	elseif (Extension == "lua" or not Extension) then
 		Launch(Path, {}, { Hold = true })
 	else
@@ -481,6 +515,9 @@ function Focus(Proc)
 		ReleaseModifiers(Focused)
 	end
 	if (Proc) then
+		if (Proc.Minimized and QueueAnimation({ Kind = "open", Proc = Proc })) then
+			Proc.Opening = true
+		end
 		Proc.Minimized = false
 		for Index, Other in ipairs(Processes) do
 			if (Other == Proc) then
@@ -498,7 +535,8 @@ function Focus(Proc)
 end
 
 local function Minimize(Proc)
-	if (not Proc) then return end
+	if (not Proc or Proc.Minimized) then return end
+	QueueAnimation({ Kind = "minimize", Proc = Proc, From = WindowRect(Proc) })
 	Proc.Minimized = true
 	Hide(Proc)
 	if (Focused == Proc) then
@@ -670,18 +708,32 @@ local function ItemRunning(Item)
 	return #Windows > 0, Focused ~= nil and Focused.AppID == Item.App.ID
 end
 
+-- Writes text over whatever is already on screen, keeping its background colours.
+local function WriteOver(X, Y, Text, Fg)
+	if (Y < 1 or Y > ScreenH or X < 1 or X + #Text - 1 > ScreenW) then return end
+	local _, _, Bg = Screen.getLine(Y)
+	Screen.setCursorPos(X, Y)
+	Screen.blit(Text, string.rep(Gfx.ToBlit(Fg), #Text), Bg:sub(X, X + #Text - 1))
+end
+
 local function DrawDock(Th)
+	local Settings = Config.Settings()
+	local Clear = Settings.DockStyle == "transparent"
+	local Height = DockHeight()
+	local IconRows = Height - 1
 	local Items = DockItems()
 	local W = #Items * 4 + 1
 	local X0 = math.floor((ScreenW - W) / 2) + 1
 	local Top = DockTop()
-	Gfx.Fill(Screen, X0, Top, W, DockH, Th.DockBg)
+	if (not Clear) then
+		Gfx.Fill(Screen, X0, Top, W, Height, Th.DockBg)
+	end
 	DockRegions = {}
 	local Unread = UnreadMessages()
 	for Index, Item in ipairs(Items) do
 		local X = X0 + 1 + (Index - 1) * 4
 		local Icon = Item.App and Item.App.Icon or Item.Icon
-		for Row = 1, 2 do
+		for Row = 1, IconRows do
 			Screen.setCursorPos(X, Top + Row - 1)
 			Screen.blit(Gfx.Pad(Icon.Lines[Row] or "", 3), string.rep(Gfx.ToBlit(Icon.Fg), 3), string.rep(Gfx.ToBlit(Icon.Bg), 3))
 		end
@@ -690,11 +742,27 @@ local function DrawDock(Th)
 		end
 		local IsRunning, IsFocused = ItemRunning(Item)
 		if (IsRunning) then
-			Gfx.Write(Screen, X + 1, Top + 2, "\7", IsFocused and Th.Accent or Th.DockFg, Th.DockBg)
+			local Color = IsFocused and Th.Accent or Th.DockFg
+			if (Clear) then
+				WriteOver(X + 1, Top + IconRows, "\7", IsFocused and Th.Accent or colors.white)
+			else
+				Gfx.Write(Screen, X + 1, Top + IconRows, "\7", Color, Th.DockBg)
+			end
 		end
 		Item.X = X
 		table.insert(DockRegions, Item)
 	end
+end
+
+-- The dock icon a window minimizes into or opens from: X, Y, W, H.
+local function DockSlot(Proc)
+	local Rows = DockHeight() - 1
+	for _, Item in ipairs(DockRegions) do
+		if (Item.Proc == Proc or (Item.App and Proc.AppID and Item.App.ID == Proc.AppID)) then
+			return { Item.X, DockTop(), 3, Rows }
+		end
+	end
+	return { math.floor(ScreenW / 2), DockTop(), 3, Rows }
 end
 
 local function LaunchpadApps()
@@ -759,11 +827,15 @@ local function DrawLaunchpad(Th)
 	end
 end
 
+local function ToastWidth()
+	return math.min(28, ScreenW - 2)
+end
+
 local function DrawToasts(Th)
 	local Y = (FocusedFullscreen() and not RevealActive()) and 1 or 2
-	local W = math.min(28, ScreenW - 2)
-	local X = ScreenW - W
+	local W = ToastWidth()
 	for _, Toast in ipairs(Toasts) do
+		local X = ScreenW - W + (Toast.Slide or 0)
 		local Lines = Gfx.Wrap(Toast.Text or "", W - 2)
 		local H = math.min(#Lines, 2) + 2
 		Gfx.Fill(Screen, X, Y, W, H, Th.MenuBg)
@@ -826,6 +898,19 @@ local function DrawDialog(Th)
 	Gfx.Shadow(Screen, X, Y, W, H, Th.Shadow)
 end
 
+-- An empty window outline used while a window opens or minimizes.
+local function DrawGhost(Th)
+	local X, Y, W, H = Ghost[1], Ghost[2], Ghost[3], Ghost[4]
+	Gfx.Fill(Screen, X, Y, W, H, Th.WindowBg)
+	Gfx.Fill(Screen, X, Y, W, 1, Th.TitleBg)
+	if (W >= 6 and H >= 2) then
+		Gfx.Write(Screen, X + 1, Y, "\7 \7 \7", Th.TitleIdleFg, Th.TitleBg)
+	end
+	if (W >= 4 and H >= 3) then
+		Gfx.Shadow(Screen, X, Y, W, H, Th.Shadow)
+	end
+end
+
 local function RestoreCursor()
 	if (Focused and Focused.Live and not Focused.AppHidden) then
 		if (Focused.Window.restoreCursor) then
@@ -844,7 +929,7 @@ function Redraw()
 		RedrawTimer = nil
 	end
 	if (Locked) then
-		if (LockScreen) then LockScreen:Draw() end
+		if (LockScreen and LockScreen.Timer) then LockScreen:Draw() end
 		return
 	end
 	local Th = Theme.Get()
@@ -852,10 +937,10 @@ function Redraw()
 	DrawWallpaper()
 	local FullFocus = FocusedFullscreen()
 	local Revealed = FullFocus and RevealActive()
-	local Overlay = Menu or Dialog or Launchpad.Open or #Toasts > 0 or Revealed
+	local Overlay = Menu or Dialog or Launchpad.Open or #Toasts > 0 or Revealed or Ghost
 	for _, Proc in ipairs(Processes) do
 		Proc.Live = false
-		if (Proc.Minimized) then
+		if (Proc.Minimized or Proc.Opening) then
 			Hide(Proc)
 		else
 			if (not Proc.Fullscreen) then
@@ -884,6 +969,7 @@ function Redraw()
 	DrawToasts(Th)
 	if (Menu) then DrawMenu(Th) end
 	if (Dialog) then DrawDialog(Th) end
+	if (Ghost) then DrawGhost(Th) end
 	Screen.setVisible(true)
 	RestoreCursor()
 end
@@ -914,6 +1000,9 @@ function Notify(Title, Text, Opts)
 	if (not Settings.Notifications) then return end
 	table.insert(Toasts, 1, Entry)
 	while (#Toasts > 3) do table.remove(Toasts) end
+	if (QueueAnimation({ Kind = "toast", Toast = Entry })) then
+		Entry.Slide = ToastWidth() + 1
+	end
 	if (Settings.NotificationSound and Opts.Sound ~= false) then
 		PlaySound(Opts.Repeat)
 	end
@@ -1020,7 +1109,14 @@ local function StartSession()
 	end
 end
 
-function Lock()
+local function Power(Action)
+	local Run = (Action == "restart") and os.reboot or os.shutdown
+	if (not QueueAnimation({ Kind = "power", Run = Run })) then
+		Run()
+	end
+end
+
+local function EnterLock()
 	Menu = nil
 	Dialog = nil
 	Launchpad.Open = false
@@ -1030,8 +1126,18 @@ function Lock()
 		Hide(Proc)
 	end
 	Locked = true
-	LockScreen = Login.new(Screen)
+	LockScreen = Login.new(Screen, { OnPower = Power })
 	LockScreen:Start()
+end
+
+-- Locking fades the desktop out and the lock screen in.
+function Lock()
+	if (Locked or PendingLock) then return end
+	if (SessionStarted and QueueAnimation({ Kind = "lock" })) then
+		PendingLock = true
+		return
+	end
+	EnterLock()
 end
 
 local function Unlock()
@@ -1081,8 +1187,8 @@ function OpenMenu(Name, X, Y, Items)
 				{ Text = "Lock Screen", Hint = "^\24L", Action = Lock },
 				{ Text = "Log Out " .. (User and User.Name or ""), Action = LogOut },
 				"-",
-				{ Text = "Restart...", Action = function() Confirm("Restart", "Restart the computer now?", "Restart", os.reboot) end },
-				{ Text = "Shut Down...", Action = function() Confirm("Shut Down", "Shut down the computer now?", "Shut Down", os.shutdown) end }
+				{ Text = "Restart...", Action = function() Confirm("Restart", "Restart the computer now?", "Restart", function() Power("restart") end) end },
+				{ Text = "Shut Down...", Action = function() Confirm("Shut Down", "Shut down the computer now?", "Shut Down", function() Power("shutdown") end) end }
 			}
 		elseif (Name == "forcequit") then
 			for _, Proc in ipairs(Processes) do
@@ -1269,7 +1375,7 @@ local function LaunchpadClick(X, Y)
 	for _, Region in ipairs(Launchpad.Regions) do
 		if (X >= Region.X and X < Region.X + Region.W and Y >= Region.Y and Y < Region.Y + Region.H) then
 			Launchpad.Open = false
-			Launch(Region.App.ID)
+			Launch(Region.App.ID, nil, { From = { Region.X + 3, Region.Y, 3, 2 } })
 			Redraw()
 			return
 		end
@@ -1341,7 +1447,7 @@ local function OnClick(Button, X, Y)
 				return
 			end
 		end
-		return
+		if (Config.Settings().DockStyle ~= "transparent") then return end
 	end
 	for Index = #Processes, 1, -1 do
 		local Proc = Processes[Index]
@@ -1351,7 +1457,7 @@ local function OnClick(Button, X, Y)
 		else
 			Inside = X >= Proc.X and X < Proc.X + Proc.W and Y >= Proc.Y and Y < Proc.Y + Proc.H
 		end
-		if (not Proc.Minimized and Inside) then
+		if (not Proc.Minimized and not Proc.Opening and Inside) then
 			if (Proc ~= Focused) then Focus(Proc) end
 			if (not Proc.Fullscreen and Y == Proc.Y) then
 				TitlebarClick(Proc, X - Proc.X, X, Y)
@@ -1441,7 +1547,7 @@ local function OnScroll(Direction, X, Y)
 	end
 	for Index = #Processes, 1, -1 do
 		local Proc = Processes[Index]
-		if (not Proc.Minimized) then
+		if (not Proc.Minimized and not Proc.Opening) then
 			local CX, CY, CW, CH = ContentRect(Proc)
 			if (X >= CX and X < CX + CW and Y >= CY and Y < CY + CH) then
 				if (not Proc.Dead) then
@@ -1572,9 +1678,14 @@ local function ClockTick()
 	local Changed = false
 	local Now = os.clock()
 	for Index = #Toasts, 1, -1 do
-		if (Toasts[Index].Expires <= Now) then
-			table.remove(Toasts, Index)
-			Changed = true
+		local Toast = Toasts[Index]
+		if (Toast.Expires <= Now and not Toast.Leaving) then
+			if (QueueAnimation({ Kind = "toastout", Toast = Toast })) then
+				Toast.Leaving = true
+			else
+				table.remove(Toasts, Index)
+				Changed = true
+			end
 		end
 	end
 	if (RevealUntil and Now >= RevealUntil) then
@@ -1622,8 +1733,12 @@ local function HandleEvent(Event)
 	if (Locked) then
 		if (InputEvents[Name]) then
 			LastInput = os.clock()
-			if (LockScreen:Event(table.unpack(Event, 1, Event.n))) then
-				Unlock()
+			if (not PendingUnlock and LockScreen:Event(table.unpack(Event, 1, Event.n))) then
+				if (QueueAnimation({ Kind = "unlock" })) then
+					PendingUnlock = true
+				else
+					Unlock()
+				end
 			end
 		elseif (Name ~= "terminate") then
 			Broadcast(Event)
@@ -1651,6 +1766,10 @@ local function HandleEvent(Event)
 		end
 	elseif (Name == "blockos_settings" or Name == "blockos_apps") then
 		RefreshApps()
+		for _, Proc in ipairs(Processes) do
+			ClampWindow(Proc)
+			ApplyGeometry(Proc)
+		end
 		Redraw()
 		Broadcast(Event)
 	elseif (Name == "disk") then
@@ -1660,6 +1779,139 @@ local function HandleEvent(Event)
 		Broadcast(Event)
 	else
 		Broadcast(Event)
+	end
+end
+
+--
+-- Animations
+--
+
+-- Waits without losing events: anything that arrives is handled after the animation.
+local function Wait(Seconds)
+	local Timer = os.startTimer(Seconds)
+	while (true) do
+		local Event = table.pack(os.pullEventRaw())
+		if (Event[1] == "timer" and Event[2] == Timer) then return end
+		table.insert(Deferred, Event)
+	end
+end
+
+local function EaseOut(T)
+	return 1 - (1 - T) ^ 2
+end
+
+local function EaseIn(T)
+	return T * T
+end
+
+local function Lerp(A, B, T)
+	return math.floor(A + (B - A) * T + .5)
+end
+
+local function PlayRect(From, To, Frames, Ease)
+	for Frame = 1, Frames do
+		local T = Ease(Frame / Frames)
+		Ghost = {
+			Lerp(From[1], To[1], T), Lerp(From[2], To[2], T),
+			math.max(1, Lerp(From[3], To[3], T)), math.max(1, Lerp(From[4], To[4], T))
+		}
+		Redraw()
+		Wait(FrameTime)
+	end
+	Ghost = nil
+end
+
+local function Fade(From, To, Steps)
+	for Step = 1, Steps do
+		if (not Gfx.SetFade(Native, From + (To - From) * Step / Steps)) then return end
+		Wait(FrameTime)
+	end
+end
+
+local Players = {}
+
+function Players.open(Animation)
+	local Proc = Animation.Proc
+	if (Proc.Dead or not Proc.Opening) then
+		Proc.Opening = nil
+		return
+	end
+	PlayRect(Animation.From or DockSlot(Proc), WindowRect(Proc), 5, EaseOut)
+	Proc.Opening = nil
+	Redraw()
+end
+
+function Players.minimize(Animation)
+	if (not Animation.Proc.Minimized) then return end
+	PlayRect(Animation.From, DockSlot(Animation.Proc), 5, EaseIn)
+	Redraw()
+end
+
+local function HasToast(Toast)
+	for _, Other in ipairs(Toasts) do
+		if (Other == Toast) then return true end
+	end
+	return false
+end
+
+function Players.toast(Animation)
+	local Toast = Animation.Toast
+	while (HasToast(Toast) and (Toast.Slide or 0) > 0) do
+		Toast.Slide = math.floor(Toast.Slide * .45)
+		Redraw()
+		Wait(FrameTime)
+	end
+end
+
+function Players.toastout(Animation)
+	local Toast = Animation.Toast
+	local W = ToastWidth()
+	while (HasToast(Toast) and (Toast.Slide or 0) < W) do
+		Toast.Slide = math.min(W, (Toast.Slide or 0) + math.ceil(W / 3))
+		Redraw()
+		Wait(FrameTime)
+	end
+	for Index, Other in ipairs(Toasts) do
+		if (Other == Toast) then table.remove(Toasts, Index) break end
+	end
+	Redraw()
+end
+
+function Players.lock()
+	Fade(1, 0, 4)
+	EnterLock()
+	Fade(0, 1, 4)
+	PendingLock = false
+end
+
+function Players.unlock()
+	Fade(1, 0, 4)
+	PendingUnlock = false
+	Unlock()
+	Fade(0, 1, 4)
+end
+
+function Players.fadein()
+	Fade(0, 1, 5)
+end
+
+function Players.power(Animation)
+	Fade(1, 0, 6)
+	Animation.Run()
+end
+
+local function RunAnimations()
+	while (#AnimationQueue > 0) do
+		local Animation = table.remove(AnimationQueue, 1)
+		local Ok, Err = pcall(Players[Animation.Kind], Animation)
+		if (not Ok) then
+			Ghost = nil
+			PendingLock, PendingUnlock = false, false
+			if (Animation.Proc) then Animation.Proc.Opening = nil end
+			Gfx.SetFade(Native, 1)
+			Log("animation: " .. tostring(Err))
+			Redraw()
+		end
 	end
 end
 
@@ -1736,8 +1988,8 @@ local function InstallAPI()
 		return History
 	end
 	BlockOS.Lock = function() Lock() end
-	BlockOS.Restart = os.reboot
-	BlockOS.Shutdown = os.shutdown
+	BlockOS.Restart = function() Power("restart") end
+	BlockOS.Shutdown = function() Power("shutdown") end
 	BlockOS.User = function() return Users.Primary() end
 	BlockOS.ScreenSize = function() return ScreenW, ScreenH end
 
@@ -1787,14 +2039,22 @@ function Desktop.Run(Shell)
 	InstallAPI()
 	RefreshApps()
 	ClockTimer = os.startTimer(1)
+	-- The boot screen ends faded to black; fade the first screen in.
+	if (not (AnimationsEnabled() and Gfx.SetFade(Native, 0) and QueueAnimation({ Kind = "fadein" }))) then
+		Gfx.SetFade(Native, 1)
+	end
 	if (Config.Settings().AutoLogin) then
 		StartSession()
 		Redraw()
 	else
-		Lock()
+		EnterLock()
 	end
 	while (Running) do
-		local Event = table.pack(os.pullEventRaw())
+		local Event = table.remove(Deferred, 1)
+		if (not Event) then
+			RunAnimations()
+			Event = table.remove(Deferred, 1) or table.pack(os.pullEventRaw())
+		end
 		local Ok, Err = pcall(HandleEvent, Event)
 		if (not Ok) then
 			Log("desktop: " .. tostring(Err))
