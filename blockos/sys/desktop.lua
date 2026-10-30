@@ -54,6 +54,10 @@ local PendingLock = false
 local PendingUnlock = false
 local FadeLevel = 1
 local FullscreenHinted = false
+local ShortcutRegions = {}
+local SelectedShortcut = nil
+local LastIconClick = { Time = 0 }
+local DesktopHidden = nil
 
 local Redraw, ScheduleRedraw, Focus, Launch, Notify, Lock, CloseProc, Kill, OpenMenu, Multishell
 
@@ -122,7 +126,7 @@ end
 local function HintFullscreen()
 	if (FullscreenHinted) then return end
 	FullscreenHinted = true
-	Notify("Full Screen", "Right click on an empty space on top to show window buttons.", { Sound = false, Duration = 7 })
+	Notify("Full Screen", "Right-click the top row to show window buttons.", { Sound = false, Duration = 7 })
 end
 
 local function WindowRect(Proc)
@@ -618,6 +622,50 @@ local function RevealTopbar()
 	Redraw()
 end
 
+-- Hides every window to show the desktop; pressed again before opening anything, brings them back.
+local function ShowDesktop()
+	Menu = nil
+	local Visible = {}
+	for _, Proc in ipairs(Processes) do
+		if (not Proc.Minimized) then table.insert(Visible, Proc) end
+	end
+	if (#Visible > 0) then
+		ReleaseModifiers(Focused)
+		for _, Proc in ipairs(Visible) do
+			Proc.Minimized = true
+			Hide(Proc)
+		end
+		DesktopHidden = Visible
+		Focused = nil
+		RevealUntil = nil
+		Redraw()
+		return
+	end
+	local Restore = DesktopHidden
+	DesktopHidden = nil
+	if (not Restore) then return end
+	local Top
+	-- Restore bottom to top so the windows keep their stacking order.
+	for _, Proc in ipairs(Restore) do
+		if (not Proc.Dead and Proc.Minimized) then
+			for Index, Other in ipairs(Processes) do
+				if (Other == Proc) then
+					table.remove(Processes, Index)
+					break
+				end
+			end
+			table.insert(Processes, Proc)
+			Proc.Minimized = false
+			Top = Proc
+		end
+	end
+	if (Top) then
+		Focus(Top)
+	else
+		Redraw()
+	end
+end
+
 --
 -- Drawing
 --
@@ -755,14 +803,18 @@ local function DrawTopbar(Th)
 	table.insert(TopbarRegions, { X = X - 1, W = #Name + 2, Menu = "app" })
 	X = X + #Name + 2
 	for _, Title in ipairs({ "Go", "Window" }) do
-		if (X + #Title < ScreenW - 12) then
+		if (X + #Title < ScreenW - 14) then
 			Put(X, Title)
 			table.insert(TopbarRegions, { X = X - 1, W = #Title + 2, Menu = Title:lower() })
 			X = X + #Title + 2
 		end
 	end
+	-- Show Desktop sits in the very corner, like the sliver at the end of a taskbar.
+	local Right = ScreenW
+	Put(Right, "\149")
+	table.insert(TopbarRegions, { X = Right - 1, W = 2, Action = "desktop" })
 	local Clock = FormatClock()
-	local Right = ScreenW - #Clock
+	Right = Right - #Clock - 1
 	Put(Right, Clock)
 	table.insert(TopbarRegions, { X = Right, W = #Clock, Action = "clock" })
 	local Status = UpdateStatus()
@@ -866,6 +918,91 @@ local function DockSlot(Proc)
 		end
 	end
 	return { math.floor(ScreenW / 2), DockTop(), 3, Rows }
+end
+
+--
+-- Desktop shortcuts
+--
+
+local ShortcutW, ShortcutH = 9, 4
+
+-- Glyph, foreground and background of a file's shortcut icon by extension.
+local FileIcons = {
+	lua = { "\4", colors.black, colors.yellow },
+	txt = { "\7", colors.gray, colors.white },
+	md = { "\7", colors.gray, colors.white },
+	dfpwm = { "\14", colors.white, colors.red },
+	rec = { "\7", colors.white, colors.red },
+	nfp = { "\127", colors.white, colors.pink },
+	bimg = { "\127", colors.white, colors.magenta },
+	json = { "\7", colors.white, colors.orange },
+	cfg = { "\7", colors.white, colors.orange },
+	[""] = { "\7", colors.white, colors.gray }
+}
+
+-- Name and icon of a shortcut, or nil while its app or file is missing (an uninstalled app, an ejected disk).
+local function ShortcutInfo(Entry)
+	local ID = Entry:match("^app:(.+)$")
+	if (ID) then
+		local App = AppCache[ID]
+		return App and { Name = App.Name, Icon = App.Icon, App = App }
+	end
+	if (not fs.exists(Entry)) then return nil end
+	local Name = fs.getName(Entry)
+	if (fs.isDir(Entry)) then
+		return { Name = Name, Path = Entry, IsDir = true, Icon = { Lines = { " \16 ", "   " }, Fg = colors.white, Bg = colors.lightBlue } }
+	end
+	local Extension = (Name:match("%.(%w+)$") or ""):lower()
+	local Kind = FileIcons[Extension] or FileIcons[""]
+	return { Name = Name, Path = Entry, Icon = { Lines = { " " .. Kind[1] .. " ", Gfx.Pad(Extension:sub(1, 3), 3, "center") }, Fg = Kind[2], Bg = Kind[3] } }
+end
+
+-- Shortcuts fill columns down the left of the desktop, between the menu bar and the dock.
+local function DrawShortcuts(Th)
+	ShortcutRegions = {}
+	local Shortcuts = Config.Settings().Shortcuts or {}
+	if (#Shortcuts == 0) then return end
+	local Rows = math.floor((DockTop() - 6) / ShortcutH) + 1
+	local Cols = math.floor((ScreenW - 1) / ShortcutW)
+	if (Rows < 1) then return end
+	local Wall = WallpaperRows()
+	local Slot = 0
+	for _, Entry in ipairs(Shortcuts) do
+		local Info = ShortcutInfo(Entry)
+		if (Info) then
+			local Col, Row = math.floor(Slot / Rows), Slot % Rows
+			if (Col >= Cols) then break end
+			Slot = Slot + 1
+			local X, Y = 2 + Col * ShortcutW, 3 + Row * ShortcutH
+			local Icon = Info.Icon
+			for Line = 1, 2 do
+				Screen.setCursorPos(X + 3, Y + Line - 1)
+				Screen.blit(Gfx.Pad(Icon.Lines[Line] or "", 3), string.rep(Gfx.ToBlit(Icon.Fg), 3), string.rep(Gfx.ToBlit(Icon.Bg), 3))
+			end
+			local Label = Gfx.Pad(Info.Name, ShortcutW - 1, "center")
+			local Fg, Bg
+			if (Entry == SelectedShortcut) then
+				Fg, Bg = string.rep(Gfx.ToBlit(Th.AccentFg), #Label), string.rep(Gfx.ToBlit(Th.Accent), #Label)
+			else
+				-- Labels sit straight on the wallpaper, in black or white to stand out from it.
+				Bg = Wall[Y + 2][3]:sub(X, X + #Label - 1)
+				Fg = Bg:gsub(".", Gfx.ContrastBlit)
+			end
+			Screen.setCursorPos(X, Y + 2)
+			Screen.blit(Label, Fg, Bg)
+			Info.Entry, Info.X, Info.Y = Entry, X, Y
+			table.insert(ShortcutRegions, Info)
+		end
+	end
+end
+
+local function ShortcutAt(X, Y)
+	for _, Info in ipairs(ShortcutRegions) do
+		if (X >= Info.X and X < Info.X + ShortcutW - 1 and Y >= Info.Y and Y < Info.Y + 3) then
+			return Info
+		end
+	end
+	return nil
 end
 
 local function LaunchpadApps()
@@ -1051,6 +1188,11 @@ function Redraw()
 	Screen.setVisible(false)
 	DrawWallpaper()
 	local FullFocus = FocusedFullscreen()
+	if (FullFocus) then
+		ShortcutRegions = {}
+	else
+		DrawShortcuts(Th)
+	end
 	local Revealed = FullFocus and RevealActive()
 	local Overlay = Menu or Dialog or Launchpad.Open or #Toasts > 0 or Revealed or Ghost
 	for _, Proc in ipairs(Processes) do
@@ -1365,6 +1507,7 @@ function OpenMenu(Name, X, Y, Items)
 				{ Text = "Minimize", Hint = "^\24M", Disabled = not Current, Action = function() Minimize(Current) end },
 				{ Text = "Zoom", Disabled = not Current or (Current and Current.Fullscreen), Action = function() Zoom(Current) end },
 				{ Text = (Current and Current.Fullscreen) and "Exit Full Screen" or "Enter Full Screen", Hint = "^\24F", Disabled = not Current, Action = function() ToggleFullscreen(Current) end },
+				{ Text = "Show Desktop", Hint = "^\24D", Action = ShowDesktop },
 				"-",
 				{ Text = "Close Window", Hint = "^\24W", Disabled = not Current, Action = function() CloseProc(Current) end }
 			}
@@ -1427,6 +1570,9 @@ local function OpenDockMenu(Item)
 		end
 		local Pinned = Apps.IsPinned(App.ID)
 		table.insert(Items, { Text = Pinned and "Remove from Dock" or "Keep in Dock", Action = function() Apps.SetPinned(App.ID, not Pinned) end })
+		local Shortcut = Apps.AppShortcut(App.ID)
+		local OnDesktop = Apps.HasShortcut(Shortcut)
+		table.insert(Items, { Text = OnDesktop and "Remove from Desktop" or "Add to Desktop", Action = function() Apps.SetShortcut(Shortcut, not OnDesktop) end })
 		if (#Windows > 0) then
 			table.insert(Items, "-")
 			table.insert(Items, { Text = "Quit", Action = function()
@@ -1435,6 +1581,79 @@ local function OpenDockMenu(Item)
 		end
 	end
 	OpenMenu("dock", Item.X, DockTop() - #Items, Items)
+end
+
+local function OpenLaunchpadMenu(Region)
+	local App = Region.App
+	local From = { Region.X + 3, Region.Y, 3, 2 }
+	local Pinned = Apps.IsPinned(App.ID)
+	local Shortcut = Apps.AppShortcut(App.ID)
+	local OnDesktop = Apps.HasShortcut(Shortcut)
+	local function Open(Mode)
+		Launchpad.Open = false
+		Launch(App.ID, nil, { From = From, Mode = Mode })
+		Redraw()
+	end
+	OpenMenu("launchpad", Region.X + 3, Region.Y + 2, {
+		{ Text = "Open", Action = function() Open() end },
+		{ Text = "Open Full Screen", Action = function() Open("fullscreen") end },
+		"-",
+		{ Text = Pinned and "Remove from Dock" or "Keep in Dock", Action = function() Apps.SetPinned(App.ID, not Pinned) end },
+		{ Text = OnDesktop and "Remove from Desktop" or "Add to Desktop", Action = function() Apps.SetShortcut(Shortcut, not OnDesktop) end }
+	})
+end
+
+local function OpenShortcut(Info)
+	if (Info.App) then
+		Launch(Info.App.ID, nil, { From = { Info.X + 3, Info.Y, 3, 2 } })
+	else
+		OpenFile(Info.Path)
+	end
+end
+
+local function OpenShortcutMenu(Info, X, Y)
+	local Items = { { Text = "Open", Action = function() OpenShortcut(Info) end } }
+	if (Info.Path) then
+		if (not Info.IsDir) then
+			table.insert(Items, { Text = "Edit", Action = function() Launch("editor", { Info.Path }) end })
+		end
+		table.insert(Items, { Text = "Show in Finder", Action = function() Launch("finder", { "/" .. fs.getDir(Info.Path) }) end })
+	end
+	table.insert(Items, "-")
+	table.insert(Items, { Text = "Remove Shortcut", Action = function() Apps.SetShortcut(Info.Entry, false) end })
+	if (Info.Path) then
+		local Kind = Info.IsDir and "Folder" or "File"
+		table.insert(Items, { Text = "Delete " .. Kind .. "...", Disabled = fs.isReadOnly(Info.Path), Action = function()
+			Confirm("Delete " .. Kind, "Delete \"" .. Info.Name .. "\"? This cannot be undone.", "Delete", function()
+				local Ok, Err = pcall(fs.delete, Info.Path)
+				if (Ok) then
+					Apps.MoveShortcuts(Info.Path, nil)
+				else
+					Notify("Delete failed", Err, { Sound = false })
+				end
+			end)
+		end })
+	elseif (not Info.App.System) then
+		table.insert(Items, { Text = "Uninstall...", Action = function()
+			Confirm("Uninstall", "Remove " .. Info.Name .. " from this computer?", "Uninstall", function()
+				Apps.Uninstall(Info.App.ID)
+			end)
+		end })
+	end
+	OpenMenu("shortcut", X, Y, Items)
+end
+
+-- One click selects a shortcut and a second one soon after opens it.
+local function ClickShortcut(Info)
+	local Now = os.clock()
+	if (LastIconClick.Entry == Info.Entry and Now - LastIconClick.Time < .4) then
+		LastIconClick = { Time = 0 }
+		OpenShortcut(Info)
+		return
+	end
+	LastIconClick = { Entry = Info.Entry, Time = Now }
+	SelectedShortcut = Info.Entry
+	Redraw()
 end
 
 local function OpenDesktopMenu(X, Y)
@@ -1479,6 +1698,8 @@ local function TopbarClick(Button, X)
 				OpenMenu(Region.Menu, Region.X, 2)
 			elseif (Region.Action == "clock") then
 				Launch("clock")
+			elseif (Region.Action == "desktop") then
+				ShowDesktop()
 			elseif (Region.Action == "update") then
 				Launch("settings", { "update" })
 			elseif (Region.Action == "recording") then
@@ -1509,9 +1730,13 @@ local function TitlebarClick(Proc, Relative, X, Y)
 	end
 end
 
-local function LaunchpadClick(X, Y)
+local function LaunchpadClick(Button, X, Y)
 	for _, Region in ipairs(Launchpad.Regions) do
 		if (X >= Region.X and X < Region.X + Region.W and Y >= Region.Y and Y < Region.Y + Region.H) then
+			if (Button == 2) then
+				OpenLaunchpadMenu(Region)
+				return
+			end
 			Launchpad.Open = false
 			Launch(Region.App.ID, nil, { From = { Region.X + 3, Region.Y, 3, 2 } })
 			Redraw()
@@ -1550,7 +1775,7 @@ local function OnClick(Button, X, Y)
 		end
 	end
 	if (Launchpad.Open) then
-		LaunchpadClick(X, Y)
+		LaunchpadClick(Button, X, Y)
 		return
 	end
 	for Index, Toast in ipairs(Toasts) do
@@ -1619,6 +1844,20 @@ local function OnClick(Button, X, Y)
 	end
 	if (Focused) then
 		Focused = nil
+		Redraw()
+	end
+	local Info = ShortcutAt(X, Y)
+	if (Info) then
+		if (Button == 2) then
+			SelectedShortcut = Info.Entry
+			OpenShortcutMenu(Info, X, Y)
+		else
+			ClickShortcut(Info)
+		end
+		return
+	end
+	if (SelectedShortcut) then
+		SelectedShortcut = nil
 		Redraw()
 	end
 	if (Button == 2) then
@@ -1723,6 +1962,8 @@ local function Shortcut(Key)
 		Lock()
 	elseif (Key == keys.t) then
 		Launch("terminal")
+	elseif (Key == keys.d) then
+		ShowDesktop()
 	elseif (Key == keys.up and FocusedFullscreen()) then
 		RevealTopbar()
 	else

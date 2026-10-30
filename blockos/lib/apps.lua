@@ -133,6 +133,11 @@ function Apps.Uninstall(ID)
 			table.remove(Settings.Dock, Index)
 		end
 	end
+	for Index = #Settings.Shortcuts, 1, -1 do
+		if (Settings.Shortcuts[Index] == Apps.AppShortcut(ID)) then
+			table.remove(Settings.Shortcuts, Index)
+		end
+	end
 	Config.Save("settings")
 	os.queueEvent("blockos_apps")
 	return true
@@ -173,6 +178,61 @@ function Apps.SetPinned(ID, Pinned)
 		table.insert(Dock, ID)
 	end
 	Config.Save("settings")
+end
+
+--
+-- Desktop shortcuts: settings.Shortcuts holds "app:<id>" for apps and absolute paths for files.
+--
+
+function Apps.AppShortcut(ID)
+	return "app:" .. ID
+end
+
+local function ShortcutTarget(Target)
+	if (Target:sub(1, 4) == "app:") then return Target end
+	return "/" .. fs.combine(Target, "")
+end
+
+function Apps.HasShortcut(Target)
+	Target = ShortcutTarget(Target)
+	for _, Entry in ipairs(Config.Settings().Shortcuts) do
+		if (Entry == Target) then return true end
+	end
+	return false
+end
+
+function Apps.SetShortcut(Target, Enabled)
+	Target = ShortcutTarget(Target)
+	local Shortcuts = Config.Settings().Shortcuts
+	for Index = #Shortcuts, 1, -1 do
+		if (Shortcuts[Index] == Target) then
+			table.remove(Shortcuts, Index)
+		end
+	end
+	if (Enabled) then
+		table.insert(Shortcuts, Target)
+	end
+	Config.Save("settings")
+end
+
+-- Follows a moved or renamed file or folder; a nil New drops the shortcuts instead.
+function Apps.MoveShortcuts(Old, New)
+	Old = ShortcutTarget(Old)
+	New = New and ShortcutTarget(New)
+	local Shortcuts = Config.Settings().Shortcuts
+	local Changed = false
+	for Index = #Shortcuts, 1, -1 do
+		local Entry = Shortcuts[Index]
+		if (Entry == Old or Entry:sub(1, #Old + 1) == Old .. "/") then
+			Changed = true
+			if (New) then
+				Shortcuts[Index] = New .. Entry:sub(#Old + 1)
+			else
+				table.remove(Shortcuts, Index)
+			end
+		end
+	end
+	if (Changed) then Config.Save("settings") end
 end
 
 return Apps
