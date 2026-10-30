@@ -9621,7 +9621,7 @@ end
 local function HintFullscreen()
 	if (FullscreenHinted) then return end
 	FullscreenHinted = true
-	Notify("Full Screen", "Click on an empty space on the top bar to show the window buttons.", { Sound = false, Duration = 7 })
+	Notify("Full Screen", "Right click on an empty space on top to show window buttons.", { Sound = false, Duration = 7 })
 end
 
 local function WindowRect(Proc)
