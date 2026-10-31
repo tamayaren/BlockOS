@@ -16,7 +16,9 @@ local function Defaults()
 		Password = "",
 		Confirm = "",
 		AutoUpdate = Settings.AutoUpdate ~= false,
-		AutoInstall = Settings.AutoInstall ~= false
+		AutoInstall = Settings.AutoInstall ~= false,
+		Public = Settings.Public ~= false,
+		Visitors = Settings.Visitors == "read" and "read" or "write"
 	}
 end
 
@@ -39,6 +41,8 @@ local function Finish(State)
 	Settings.StorageRoot = "/" .. fs.combine(State.StorageRoot, "")
 	Settings.AutoUpdate = State.AutoUpdate
 	Settings.AutoInstall = State.AutoInstall
+	Settings.Public = State.Public ~= false
+	Settings.Visitors = State.Visitors == "read" and "read" or "write"
 	Settings.Configured = true
 	Server.Save()
 	if (State.Password ~= "") then Server.SetPassword(State.Password) end
@@ -68,7 +72,7 @@ function Setup.Run(Opts)
 	local Gfx = BlockOS.Require("gfx")
 	local Logo = BlockOS.Require("logo")
 	local State = Defaults()
-	local Steps = { "welcome", "identity", "storage", "admin", "updates" }
+	local Steps = { "welcome", "identity", "storage", "access", "admin", "updates" }
 	if (Opts.Install) then table.insert(Steps, "install") end
 	table.insert(Steps, "done")
 	local Page = Ui.Page.new({ Bg = "WindowBg" })
@@ -150,6 +154,24 @@ function Setup.Run(Opts)
 			State.StorageRoot = Item.Path
 			Input:SetValue(Item.Path)
 		end
+		Footer("Continue")
+	end
+
+	function Builders.access()
+		Heading("Who can use it", "A public server works for every computer in range straight away. A private one needs the administrator to pair each computer with a code.")
+		local Visitors
+		Page:Add(Ui.Toggle.new({ X = 3, Y = 6, Value = not State.Public, OnChange = function(_, Value)
+			State.Public = not Value
+			Visitors.Visible = State.Public
+			Page:Invalidate()
+		end }))
+		Page:Add(Ui.Label.new({ X = 9, Y = 6, Text = "Require pairing (private server)" }))
+		Visitors = Page:Add(Ui.Tabs.new({ X = 3, Y = 8, W = math.min(30, Page.W - 4), Items = { "Visitors: read only", "Read & write" },
+			Selected = State.Visitors == "read" and 1 or 2, Visible = State.Public, OnChange = function(_, Index)
+				State.Visitors = Index == 1 and "read" or "write"
+			end }))
+		Page:Add(Ui.Label.new({ X = 3, Y = 10, W = Page.W - 4, H = 3, Fg = "SubText",
+			Text = "Paired computers always keep their own permission and encrypted transfers. Change this later in Settings > Security." }))
 		Footer("Continue")
 	end
 
@@ -241,9 +263,12 @@ function Setup.RunText(Opts)
 		end
 	end
 	print("BlockOS Server setup")
-	for _, Step in ipairs({ "identity", "storage", "admin" }) do
+	for _, Step in ipairs({ "identity", "storage", "access", "admin" }) do
 		while (true) do
-			if (Step == "identity") then
+			if (Step == "access") then
+				write("Require pairing (private server)? (y/N): ")
+				State.Public = (read() or ""):lower():sub(1, 1) ~= "y"
+			elseif (Step == "identity") then
 				Ask("Hostname", "Hostname")
 				Ask("Display name", "DisplayName")
 			elseif (Step == "storage") then

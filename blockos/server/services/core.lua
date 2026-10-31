@@ -25,6 +25,8 @@ function Core.Node()
 		Edition = "server",
 		Encrypt = Settings.Encrypt ~= false,
 		Pairing = Settings.PairingOpen ~= false,
+		Public = Settings.Public ~= false,
+		Visitors = Settings.Visitors == "read" and "read" or "write",
 		Services = Manager and Manager.Announced() or {}
 	}
 end
@@ -75,7 +77,7 @@ function Core.Init(Ctx)
 			return { Status = "pending" }
 		end },
 
-		-- Paired clients call this to confirm their key still works and learn their permission.
+		-- Paired clients (and visitors on a public server) confirm access and learn their permission.
 		hello = { Access = "read", Handler = function(Req)
 			for ID, Request in pairs(Clients.Pending) do
 				if (Request.ClientID == Req.Client.ID) then Clients.Pending[ID] = nil end

@@ -21,6 +21,10 @@ Config.Defaults["cloud/server"] = {
 	ShareDisks = true,
 	DiskMode = "pool",
 	Disks = {},
+	-- Public servers let any computer in range use BlockDrive without pairing, with Visitors
+	-- ("read" or "write") access. Paired computers keep their own permission either way.
+	Public = true,
+	Visitors = "write",
 	PairingOpen = true,
 	Encrypt = true,
 	QuotaMB = 0,
@@ -35,7 +39,24 @@ Config.Defaults["cloud/server"] = {
 	LogLevel = "info"
 }
 
+local Migrated = false
+
+-- Servers set up before public access existed and that already have paired computers stay
+-- private: updating must never open someone's storage to everyone.
+local function Migrate()
+	Migrated = true
+	local Saved = Config.Read(fs.combine(Config.DataDir, "cloud/server.dat"))
+	if (type(Saved) ~= "table" or Saved.Public ~= nil) then return end
+	local Paired = Config.Read(fs.combine(Server.DataDir, "clients.dat"))
+	if (type(Paired) == "table" and next(Paired) ~= nil) then
+		local Settings = Config.Load("cloud/server")
+		Settings.Public = false
+		Config.Save("cloud/server")
+	end
+end
+
 function Server.Settings()
+	if (not Migrated) then Migrate() end
 	local Settings = Config.Load("cloud/server")
 	if (type(Settings.NodeID) ~= "string") then
 		Settings.NodeID = Auth.RandomHex(8)

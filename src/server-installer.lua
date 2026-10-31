@@ -4,6 +4,7 @@
 --
 -- Unattended install for whole racks of computers:
 --   server-install --yes [--hostname rack1] [--name "Data Center"] [--storage /blockcloud/storage] [--password secret]
+--                  [--private] [--visitors read]   (default: public, visitors may read and write)
 
 local Version = "@VERSION@"
 local Files = {}
@@ -22,6 +23,8 @@ do
 		local Arg = Args[Index]
 		if (Arg == "--yes" or Arg == "-y") then
 			Options.Yes = true
+		elseif (Arg == "--private") then
+			Options.Private = true
 		elseif (Arg:sub(1, 2) == "--" and Args[Index + 1]) then
 			Options[Arg:sub(3)] = Args[Index + 1]
 			Index = Index + 1
@@ -183,7 +186,9 @@ if (Options.Yes) then
 		StorageRoot = Options.storage or "/blockcloud/storage",
 		Password = Options.password or "",
 		AutoUpdate = true,
-		AutoInstall = true
+		AutoInstall = true,
+		Public = not Options.Private,
+		Visitors = Options.visitors == "read" and "read" or "write"
 	}
 	if (not Server.ValidHostname(State.Hostname)) then State.Hostname = "server" .. os.getComputerID() end
 	Setup.Finish(State)

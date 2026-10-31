@@ -16,6 +16,8 @@ Rpc.Stats = { Requests = 0, Errors = 0, Rejected = 0, Started = os.epoch("utc") 
 
 local Seen = {}
 local Buckets = {}
+-- Computers using a public server without pairing, by computer ID: last time seen.
+Rpc.Visitors = {}
 
 -- Access is "public" (no pairing needed), "read" or "write".
 function Rpc.Register(Service, Ops)
@@ -52,8 +54,9 @@ local function ErrorBody(Code, Detail)
 	return { Ok = false, Code = Code, Msg = Detail or Protocol.Errors[Code] or Code }
 end
 
--- Unpaired computers get a small budget of public requests, so pairing spam stays cheap.
-local function Allowed(Sender)
+-- Unpaired computers get a request budget, so spam stays cheap. Visitors on a public server
+-- transfer files (one request per 8 KB), so their budget is larger.
+local function Allowed(Sender, Limit)
 	local Now = os.epoch("utc")
 	local Bucket = Buckets[Sender]
 	if (not Bucket or Now - Bucket.Since > 10000) then
@@ -61,7 +64,16 @@ local function Allowed(Sender)
 		Buckets[Sender] = Bucket
 	end
 	Bucket.Count = Bucket.Count + 1
-	return Bucket.Count <= 30
+	return Bucket.Count <= (Limit or 30)
+end
+
+-- An unpaired computer on a public server. It is only ever trusted with the visitor permission.
+local function Visitor(Sender, Settings)
+	Rpc.Visitors[Sender] = os.epoch("utc")
+	return {
+		ID = "visitor-" .. Sender, ComputerID = Sender, Name = "Computer #" .. Sender, Visitor = true,
+		Permission = Settings.Visitors == "read" and "read" or "write"
+	}
 end
 
 local function Resume(Worker, ...)
@@ -87,7 +99,14 @@ function Rpc.Handle(Sender, Msg, ProtocolName)
 	local Service = Rpc.Services[Msg.Svc]
 	local Def = Service and Service[Msg.Op]
 	local Client, Keys
-	if (Def and Def.Access ~= "public") then
+	local Settings = BlockOS.Require("server/config").Settings()
+	if (Def and Def.Access ~= "public" and Msg.Cl == nil and Settings.Public) then
+		if (not Allowed(Sender, 400)) then
+			Rpc.Stats.Rejected = Rpc.Stats.Rejected + 1
+			return
+		end
+		Client = Visitor(Sender, Settings)
+	elseif (Def and Def.Access ~= "public") then
 		Client = Clients.Get(Msg.Cl)
 		if (not Client or Client.ComputerID ~= Sender) then
 			Rpc.Stats.Rejected = Rpc.Stats.Rejected + 1
@@ -136,7 +155,7 @@ function Rpc.Handle(Sender, Msg, ProtocolName)
 		Reply(Sender, ProtocolName, Msg, ErrorBody("busy"), Keys)
 		return
 	end
-	if (Client) then Clients.Touch(Client) end
+	if (Client and not Client.Visitor) then Clients.Touch(Client) end
 
 	local Entry = { Time = os.epoch("utc") }
 	Seen[SeenKey] = Entry
@@ -184,6 +203,9 @@ function Rpc.Cleanup()
 	end
 	for Sender, Bucket in pairs(Buckets) do
 		if (os.epoch("utc") - Bucket.Since > 60000) then Buckets[Sender] = nil end
+	end
+	for Sender, Seen in pairs(Rpc.Visitors) do
+		if (os.epoch("utc") - Seen > 3600000) then Rpc.Visitors[Sender] = nil end
 	end
 end
 

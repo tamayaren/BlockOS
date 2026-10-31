@@ -1,0 +1,26 @@
+-- BlockDrive on the desktop with a public server: Connect adds it at once, no code.
+local T = dofile("/tests/testlib.lua")
+local D = dofile("/tests/driver.lua")
+
+local function Test()
+	T.Check("public gui: BlockDrive opens", D.Wait("No servers yet", 40) ~= nil)
+	local X, Y = D.Wait("Add Server")
+	D.Click(X, Y)
+	X, Y = D.Wait("(datacent", 10)
+	D.Dump("/screens.txt")
+	T.Check("public gui: server listed as public", X ~= nil and D.Find("public") ~= nil)
+	D.Click(X, Y)
+	X, Y = D.Wait(" Connect ", 5, true)
+	D.Click(X + 1, Y)
+	T.Check("public gui: connected without a code", D.Wait("Connected to Data Center", 15) ~= nil and D.Find("type this code") == nil)
+	T.Check("public gui: browses the server", D.Wait("Shared", 10) ~= nil)
+	D.Dump("/screens.txt")
+end
+
+parallel.waitForAny(function()
+	shell.run("/blockos/boot.lua")
+end, function()
+	sleep(20)
+	T.Run(Test)
+	sleep(60)
+end)
