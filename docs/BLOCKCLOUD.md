@@ -112,9 +112,13 @@ Then the setup assistant asks for:
    name**. Clients see the display name, for example *BlockDrive > Data Center > Shared*.
 2. **Storage location**: `/blockcloud/storage` by default, or a folder on an attached disk
    drive. It cannot be the computer's root, `/rom` or `/blockos`.
-3. **Administrator password** for the console (optional). The services run whether or not
+3. **Who can use it**: **public** (the default) lets every BlockOS computer in range use
+   BlockDrive at once, with no pairing, and visitors may **read and write** (or only read).
+   **Private** ("Require pairing") needs the administrator to pair each computer with a code.
+   See [Public and private servers](#public-and-private-servers).
+4. **Administrator password** for the console (optional). The services run whether or not
    anyone logs in; the password only protects the console.
-4. **Updates**: check automatically, and install in the background.
+5. **Updates**: check automatically, and install in the background.
 
 The computer restarts into Server Edition. Basic computers get the same questions as plain
 text prompts.
@@ -128,7 +132,9 @@ wget https://raw.githubusercontent.com/tamayaren/BlockOS/server/server-install.l
 server-install --yes --hostname rack1 --name "Data Center" --storage /blockcloud/storage --password secret
 ```
 
-`--yes` also accepts replacing a desktop install, so use it with care.
+Servers installed this way are public with read and write for visitors; add `--private` to
+require pairing, or `--visitors read` to make visitors read-only. `--yes` also accepts
+replacing a desktop install, so use it with care.
 
 ### What is installed
 
@@ -174,8 +180,9 @@ other desktop apps.
   every 15 seconds and when something changes.
 * **Clients**: paired computers, their access and when they were last seen. Change a client
   between read-only and read/write, rename it, or remove it (it must pair again).
-* **Pairing**: computers waiting to pair. Choose **Approve...**, type the code the client
-  shows, then pick read-only or read/write. Toggle whether new requests are accepted at all.
+* **Pairing**: whether the server is public or private, and computers waiting to pair. Choose
+  **Approve...**, type the code the client shows, then pick read-only or read/write. Toggle
+  whether new requests are accepted at all. On a public server pairing is optional.
 * **Logs**: the most recent log lines. The full log is `/blockos/data/cloud/logs/server.log`
   (rotated at 32 KB to `server.old.log`).
 * **Settings**: see the [reference](#settings-reference).
@@ -206,6 +213,8 @@ bcloud disk 3 name Archive       rename disk 3
 bcloud set diskmode pool         how new disks are used; bcloud set disks off ignores all
 bcloud logs 30
 bcloud update install            check for and install an update
+bcloud set public off            require pairing (on: anyone in range may use it)
+bcloud set visitors read         what unpaired computers may do on a public server (read|write)
 bcloud set hostname rack1        also: name, storage, quota, pairing on|off, encrypt on|off
 bcloud password
 ```
@@ -238,10 +247,26 @@ This adds the BlockDrive app (pinned to the Dock), the BlockCloud client library
 (`/blockos/lib/cloud`) and the `bdrive` command, and changes nothing else. Desktop updates
 from `main` keep it. Run it again to update, or use **BlockDrive > menu > Check for Updates**.
 
+### Public and private servers
+
+A **public** server (the default) needs nothing from the administrator: in BlockDrive choose
+**Add Server**, pick the server (marked *public*) and **Connect**. Every computer that connects
+this way is a *visitor* with the access set under **Settings > Security > Visitors**: read and
+write by default, or read only. The overview counts recent visitors.
+
+A **private** server (Settings > Security > **Require pairing**, or `bcloud set public off`)
+only serves computers the administrator has paired. Turning a public server private shuts
+visitors out straight away; paired computers are unaffected. Servers that already had paired
+computers before public access existed stay private when they update.
+
+Pairing also works on a public server. A paired computer gets its own permission (for example
+read and write while visitors may only read) and signed, encrypted transfers. In BlockDrive,
+use the menu's **Pair with Code...** on a server you connected to as a visitor.
+
 ### Pair
 
 1. Open **BlockDrive** and choose **Add Server**. Servers in modem range are listed.
-2. Pick the Data Center and give this computer a name. BlockDrive shows an
+2. Pick the Data Center, choose **Connect** and give this computer a name. BlockDrive shows an
    **8-character code** such as `K7QM-2X9D`.
 3. On the server console, open **Pairing**, approve the request and type that code
    (or `bcloud approve <n> <code>`), choosing read-only or read/write.
@@ -279,7 +304,8 @@ delete shares; the administrator does that in Finder on the server.
 
 ```
 bdrive discover                  servers in range
-bdrive pair datacenter           pair (shows the code to give the administrator)
+bdrive pair datacenter           add a public server, or pair with a private one (shows the code)
+bdrive pair datacenter code      pair with a code even though the server is public
 bdrive servers                   paired servers and whether they answer
 bdrive info
 bdrive ls Shared
@@ -326,6 +352,8 @@ Server settings are stored in `/blockos/data/cloud/server.dat` and edited in **S
 | Disks | Use disk drives | on | Off ignores every disk drive. |
 | Disks | New disks | Pool | How a newly attached disk is used: Pool, Own share or Unused. |
 | Disks | Pool / Own Share / Unused / Rename | | Per disk; settings follow the floppy's ID. |
+| Security | Require pairing (private server) | off | Off: public, any computer in range may use BlockDrive. On: only paired computers. |
+| Security | Visitors | Read & write | What unpaired computers may do on a public server. |
 | Security | Accept pairing requests | on | Turn off once everyone is paired. |
 | Security | Encrypt file transfers | on | ChaCha20 encryption of request and response bodies. Turning it off saves CPU. |
 | Security | Lock after | 10 min | Idle time before the console locks (needs a password). |
@@ -376,10 +404,18 @@ chunks or near where players spend time. CC: Tweaked computers do not run in unl
 
 ## Security model and Rednet's limits
 
-BlockCloud is designed for a private in-game network among friends. Know what it does and
+BlockCloud is designed for an in-game network among friends. Know what it does and
 does not protect:
 
-**What it does**
+**Public servers (the default)** trust everyone in modem range. Any computer can read and,
+unless visitors are set to read only, change or delete files in the shares, and visitor traffic
+is neither signed nor encrypted. Visitors are still confined to the storage folder and its
+disks, cannot change shares, and are rate limited. Make a server private if what it stores
+matters, or make visitors read-only and pair the computers that should write.
+
+**Paired computers** (on private servers, or paired on public ones) get the protections below.
+
+**What pairing does**
 
 * A computer is trusted only after the administrator approves it with the one-time code shown
   on that computer. Hostnames, labels, usernames and claimed computer IDs are never trusted on
@@ -423,6 +459,8 @@ does not protect:
 | BlockDrive finds no servers | Is the server on and does the console show a modem under Network? Is the client in range (wireless about 64 blocks; use an ender modem for distance)? Are both modems open (Settings > Network on the desktop)? |
 | *The server is not reachable* | The server is off, its chunk is unloaded, or it is out of range. BlockDrive reconnects by itself when it comes back. |
 | *This computer is not paired* | The client was removed on the server, or the server's data was reset. Choose Forget Server in BlockDrive and pair again. |
+| *... is no longer public* | The administrator made the server private. Choose **Pair with Code...** in BlockDrive's menu and have the administrator approve it. |
+| Visitors cannot upload | Visitors are read-only (Settings > Security > Visitors). Make them read and write, or pair the computer. |
 | *The message could not be verified* | Keys no longer match (for example, data restored from a backup on one side). Forget the server and pair again. |
 | The code is refused | Type it exactly as shown (dash and case do not matter). Each request has its own code; if the client started again, use the new one. |
 | Pairing requests do not appear | *Accept pairing requests* must be on (Pairing tab or Settings > Security). |
@@ -547,6 +585,9 @@ each installer ships:
   that moves to another disk, a disk on its own share, ejecting and reinserting a pooled disk,
   and a rack of **100 drives** on one wired modem (4 MB stored over 40 floppies; info about
   0.2 s and listing about 0.15 s on this machine).
+* Public servers: connecting without pairing, visitors reading and writing, read-only visitors,
+  optional pairing for more access, switching to private, the upgrade rule that keeps
+  already-paired servers private, and one-click Connect in the desktop's BlockDrive app.
 * The milestone's vertical slice on separate computers: discovery, pairing with a code (and a
   wrong code), upload, remote read, edit and save, folders, rename, copy, move, delete,
   download, path traversal attempts, forged and replayed requests, an interrupted upload,

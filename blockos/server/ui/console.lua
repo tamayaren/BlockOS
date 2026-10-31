@@ -131,9 +131,15 @@ function Tab.Overview(X, Y, W, H)
 		if (Client.LastSeen and os.epoch("utc") - Client.LastSeen < 600000) then Recent = Recent + 1 end
 	end
 	local Pending = #Clients.PendingList()
-	Util.Line(Row, "Clients", Pending > 0 and "warn" or nil,
-		#List .. " paired, " .. Recent .. " active recently" .. (Pending > 0 and (", " .. Pending .. " waiting to pair") or ""), X, W)
-	Util.Line(Row + 1, "Requests", nil, Rpc.Stats.Requests .. " handled, " .. Rpc.Stats.Rejected .. " rejected, " .. Rpc.Stats.Errors .. " errors", X, W)
+	local Visitors = 0
+	for _, Seen in pairs(Rpc.Visitors) do
+		if (os.epoch("utc") - Seen < 600000) then Visitors = Visitors + 1 end
+	end
+	Util.Line(Row, "Access", nil, Util.AccessText(), X, W)
+	Util.Line(Row + 1, "Clients", Pending > 0 and "warn" or nil,
+		#List .. " paired, " .. Recent .. " active" .. (Server.Settings().Public ~= false and (", " .. Visitors .. " visitors") or "")
+		.. (Pending > 0 and (", " .. Pending .. " waiting to pair") or ""), X, W)
+	Util.Line(Row + 2, "Requests", nil, Rpc.Stats.Requests .. " handled, " .. Rpc.Stats.Rejected .. " rejected, " .. Rpc.Stats.Errors .. " errors", X, W)
 end
 
 function Tab.Clients(X, Y, W, H)
@@ -183,8 +189,17 @@ function Tab.Clients(X, Y, W, H)
 	end }))
 end
 
+-- Public: any computer may use BlockDrive with the visitor permission. Private: pairing needed.
+function Util.AccessText()
+	local Settings = Server.Settings()
+	if (Settings.Public == false) then return "Private: computers must pair" end
+	return "Public: anyone may " .. (Settings.Visitors == "read" and "read" or "read and write") .. ", no pairing"
+end
+
 function Tab.Pairing(X, Y, W, H)
 	local Settings = Server.Settings()
+	Page:Add(Ui.Label.new({ X = X, Y = Y + 1, W = W, Fg = "Accent", Text = Util.AccessText() .. (Settings.Public ~= false and " (optional)" or "") }))
+	Y, H = Y + 1, H - 1
 	Page:Add(Ui.Toggle.new({ X = X, Y = Y, Value = Settings.PairingOpen ~= false, OnChange = function(_, Value)
 		Settings.PairingOpen = Value
 		Server.Save()
@@ -197,7 +212,8 @@ function Tab.Pairing(X, Y, W, H)
 	end
 	if (#Items == 0) then
 		Page:Add(Ui.Label.new({ X = X, Y = Y + 2, W = W, H = 5, Fg = "SubText",
-			Text = "No computers are waiting. When one asks to pair, it shows an 8-character code: approve the request here and type that code to confirm it is the right computer." }))
+			Text = "No computers are waiting. When one asks to pair, it shows an 8-character code: approve the request here and type that code to confirm it is the right computer."
+				.. (Settings.Public ~= false and " On a public server, pairing gives a computer its own permission and encrypted transfers." or "") }))
 		return
 	end
 	local List = Page:Add(Ui.List.new({ X = X, Y = Y + 2, W = W, H = H - 4, Items = Items, Bg = "Panel" }))
@@ -396,6 +412,25 @@ end
 
 function Section.Security(X, Y, W)
 	local Settings = Server.Settings()
+	-- Pairing is optional unless required here; visitors get the permission chosen below.
+	Page:Add(Ui.Toggle.new({ X = X, Y = Y, Value = Settings.Public == false, OnChange = function(_, Value)
+		Settings.Public = not Value
+		Server.Save()
+		Util.Core().Announce()
+		Log.Info("auth", Value and "Pairing is now required (private server)" or "Server is now public: no pairing needed")
+		Build()
+	end }))
+	Page:Add(Ui.Label.new({ X = X + 5, Y = Y, W = W - 5, Text = "Require pairing (private server)" }))
+	if (Settings.Public ~= false) then
+		Page:Add(Ui.Label.new({ X = X, Y = Y + 1, Text = "Visitors" }))
+		Page:Add(Ui.Tabs.new({ X = X + 11, Y = Y + 1, W = math.min(26, W - 11), Items = { "Read only", "Read & write" },
+			Selected = Settings.Visitors == "read" and 1 or 2, OnChange = function(_, Index)
+				Settings.Visitors = Index == 1 and "read" or "write"
+				Server.Save()
+				Util.Core().Announce()
+			end }))
+	end
+	Y = Y + 3
 	Util.Switch(X, Y, W, "Accept pairing requests", "PairingOpen")
 	Util.Switch(X, Y + 2, W, "Encrypt file transfers", "Encrypt", function()
 		Util.Core().Announce()

@@ -13,7 +13,8 @@ local function Usage()
 	print("Usage: bdrive <command>")
 	print("  servers               paired servers")
 	print("  discover              servers in range")
-	print("  pair <hostname>       pair with a server")
+	print("  pair <hostname>       add a server (public ones at once)")
+	print("  pair <hostname> code  pair with a code even if public")
 	print("  forget <hostname>     unpair")
 	print("  info                  space and access")
 	print("  ls [path]             list a folder")
@@ -77,7 +78,7 @@ local function Run()
 		local Nodes = Check(Client.Discover(2))
 		if (#Nodes == 0) then print("No servers answered.") end
 		for _, Node in ipairs(Nodes) do
-			print(Node.Hostname .. "  " .. Node.Name .. "  #" .. Node.ComputerID .. (Node.Paired and "  (paired)" or ""))
+			print(Node.Hostname .. "  " .. Node.Name .. "  #" .. Node.ComputerID .. (Node.Paired and "  (added)" or (Node.Public and "  (public)" or "")))
 		end
 	elseif (Command == "pair" and Args[1]) then
 		local Target
@@ -85,6 +86,11 @@ local function Run()
 			if (Node.Hostname == Args[1]) then Target = Node end
 		end
 		if (not Target) then Die("No server called " .. Args[1] .. " answered.") end
+		if (Target.Public and Args[2] ~= "code") then
+			local Server = Check(Client.Connect(Target))
+			print("Connected to " .. Client.Title(Server) .. " (public, " .. (Server.Permission == "write" and "read/write" or "read only") .. ").")
+			return
+		end
 		local Session = Check(Client.StartPairing(Target))
 		print("Ask the administrator of " .. Target.Name .. " to approve this computer with the code:")
 		print()

@@ -31,6 +31,7 @@ SERVER_CONFIG = """{
   StorageRoot = "/blockcloud/storage",
   DefaultShare = "Shared",
   Encrypt = %s,
+  Public = %s,
   AutoUpdate = false,
   LockMinutes = 0,
 }
@@ -70,15 +71,16 @@ NEXT_VERSION = ".".join(SERVER_VERSION.split(".")[:-1] + [str(int(SERVER_VERSION
 
 def copy_tests(root):
     shutil.copytree(ROOT / "tests" / "lua", root / "tests")
-    (root / "tests" / "versions.lua").write_text('return { Server = "%s", Next = "%s" }\n' % (SERVER_VERSION, NEXT_VERSION))
+    client_version = (ROOT / "blockos/apps/blockdrive/version.txt").read_text().strip()
+    (root / "tests" / "versions.lua").write_text('return { Server = "%s", Next = "%s", Client = "%s" }\n' % (SERVER_VERSION, NEXT_VERSION, client_version))
 
 
-def server(root, encrypt=True, admin=True):
+def server(root, encrypt=True, admin=True, public=False):
     copy_edition("server", root)
     (root / "blockos" / "version.txt").write_text((ROOT / "blockos/server/version.txt").read_text())
     config = root / "blockos" / "data" / "cloud" / "server.dat"
     config.parent.mkdir(parents=True, exist_ok=True)
-    config.write_text(SERVER_CONFIG % ("true" if encrypt else "false"))
+    config.write_text(SERVER_CONFIG % ("true" if encrypt else "false", "true" if public else "false"))
     copy_tests(root)
     if admin:
         (root / "startup.lua").write_text('shell.run("/tests/server_startup.lua")\n')
@@ -301,8 +303,8 @@ def scenario_setup():
     def fresh(root):
         server(root, admin=False)
         (root / "blockos" / "data" / "cloud" / "server.dat").unlink()
-    # Welcome, name, storage, password, updates, done: the primary button sits bottom right.
-    events = "\n".join("event 1 %d mouse_click 1 44 18\nsnap 1 %.1f" % (t, t - .2) for t in range(3, 9))
+    # Welcome, name, storage, access, password, updates, done: the primary button sits bottom right.
+    events = "\n".join("event 1 %d mouse_click 1 44 18\nsnap 1 %.1f" % (t, t - .2) for t in range(3, 10))
     return run("setup", [
         (1, "wizard", fresh, {"screen"}),
         (2, "check", lambda r: client(r, "setup_check"), {"wait"}),
@@ -500,10 +502,34 @@ def scenario_rack():
     return failed
 
 
+def scenario_public():
+    """A public server (the default): no pairing, visitors read and write; plus migration."""
+    def upgraded(root):
+        # Set up before public access existed, with a paired computer: must stay private.
+        server(root)
+        config = root / "blockos" / "data" / "cloud" / "server.dat"
+        config.write_text(config.read_text().replace("  Public = false,\n", "").replace('"datacenter"', '"oldserver"'))
+        (root / "blockos" / "data" / "cloud" / "clients.dat").write_text(
+            '{ abc = { ID = "abc", ComputerID = 9, Name = "Old", Key = "%s", Permission = "write" } }' % ("00" * 32))
+
+    def fresh(root):
+        server(root)
+        config = root / "blockos" / "data" / "cloud" / "server.dat"
+        config.write_text(config.read_text().replace("  Public = false,\n", ""))
+
+    return run("public", [
+        (1, "server", fresh, {"basic"}),
+        (2, "client", lambda r: client(r, "client_public"), {"wait"}),
+        (3, "upgraded", upgraded, {"basic"}),
+        (4, "desktop", lambda r: desktop(r, "public_gui"), {"wait"}),
+    ], timeout=120)
+
+
 SCENARIOS = {
     "unit": scenario_unit,
     "vertical": scenario_vertical,
     "network": scenario_network,
+    "public": scenario_public,
     "disks": scenario_disks,
     "rack": scenario_rack,
     "console": scenario_console,

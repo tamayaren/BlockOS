@@ -30,7 +30,8 @@ local function Usage()
 	print("  logs [lines]              recent log lines")
 	print("  update [install]          check for (and install) updates")
 	print("  set <key> <value>         hostname, name, storage,")
-	print("                            quota, pairing, encrypt,")
+	print("                            quota, public on|off,")
+	print("                            visitors read|write, pairing, encrypt,")
 	print("                            disks on|off, diskmode pool|share|off")
 	print("  password                  set the admin password")
 end
@@ -63,7 +64,11 @@ if (Command == "status") then
 		local Usage = Drive.Module.Usage()
 		print("Storage " .. Drive.Module.Root() .. ": " .. Usage.Files .. " files, " .. Usage.Bytes .. " bytes, " .. fs.getFreeSpace(Drive.Module.Root()) .. " bytes free")
 	end
-	print(#Clients.List() .. " paired, " .. #Clients.PendingList() .. " pending, " .. Rpc.Stats.Requests .. " requests handled")
+	local Visitors = 0
+	for _ in pairs(Rpc.Visitors) do Visitors = Visitors + 1 end
+	local Settings = Server.Settings()
+	print((Settings.Public ~= false and ("Public: visitors may " .. (Settings.Visitors == "read" and "read" or "read and write")) or "Private: pairing required")
+		.. "; " .. #Clients.List() .. " paired, " .. Visitors .. " visitors, " .. #Clients.PendingList() .. " pending, " .. Rpc.Stats.Requests .. " requests")
 elseif (Command == "pending") then
 	local List = Clients.PendingList()
 	if (#List == 0) then print("No pairing requests.") end
@@ -163,6 +168,11 @@ elseif (Command == "set" and Args[2] and Args[3]) then
 		Settings.StorageRoot = "/" .. fs.combine(Value, "")
 	elseif (Key == "quota") then
 		Settings.QuotaMB = tonumber(Value) or 0
+	elseif (Key == "public") then
+		Settings.Public = Value == "on" or Value == "true" or Value == "yes"
+	elseif (Key == "visitors") then
+		if (Value ~= "read" and Value ~= "write") then return printError("Use read or write.") end
+		Settings.Visitors = Value
 	elseif (Key == "diskmode") then
 		if (not Volumes.Modes[Value]) then return printError("Use pool, share or off.") end
 		Settings.DiskMode = Value
@@ -174,7 +184,7 @@ elseif (Command == "set" and Args[2] and Args[3]) then
 	Server.Save()
 	if (Key == "storage") then Manager.Restart("blockdrive") end
 	if (Key == "disks") then Volumes.Refresh() os.queueEvent("blockcloud_storage") end
-	if (Key == "hostname" or Key == "encrypt") then Core().Announce() end
+	if (Key == "hostname" or Key == "encrypt" or Key == "public" or Key == "visitors") then Core().Announce() end
 	print("Saved.")
 elseif (Command == "password") then
 	write("New admin password (empty for none): ")

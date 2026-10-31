@@ -35,8 +35,9 @@ from the App Store (Discover > Utilities), or run:
 wget run https://raw.githubusercontent.com/tamayaren/BlockOS/server/blockdrive-install.lua
 ```
 
-Then open **BlockDrive**, choose **Add Server**, and approve the computer on the server
-console with the code BlockDrive shows. The desktop edition below is unchanged and still
+Then open **BlockDrive**, choose **Add Server** and **Connect**. Servers are public by default
+(anyone in range may read and write, no pairing); a private server asks you to approve the
+computer on its console with the code BlockDrive shows. The desktop edition below is unchanged and still
 installs and updates from `main`.
 
 ## Install

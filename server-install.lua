@@ -4,8 +4,9 @@
 --
 -- Unattended install for whole racks of computers:
 --   server-install --yes [--hostname rack1] [--name "Data Center"] [--storage /blockcloud/storage] [--password secret]
+--                  [--private] [--visitors read]   (default: public, visitors may read and write)
 
-local Version = "1.1.0"
+local Version = "1.2.0"
 local Files = {}
 Files["startup.lua"] = [[
 -- Boots BlockOS when it is installed: Server Edition if present, otherwise the desktop.
@@ -3314,7 +3315,8 @@ local function Usage()
 	print("  logs [lines]              recent log lines")
 	print("  update [install]          check for (and install) updates")
 	print("  set <key> <value>         hostname, name, storage,")
-	print("                            quota, pairing, encrypt,")
+	print("                            quota, public on|off,")
+	print("                            visitors read|write, pairing, encrypt,")
 	print("                            disks on|off, diskmode pool|share|off")
 	print("  password                  set the admin password")
 end
@@ -3347,7 +3349,11 @@ if (Command == "status") then
 		local Usage = Drive.Module.Usage()
 		print("Storage " .. Drive.Module.Root() .. ": " .. Usage.Files .. " files, " .. Usage.Bytes .. " bytes, " .. fs.getFreeSpace(Drive.Module.Root()) .. " bytes free")
 	end
-	print(#Clients.List() .. " paired, " .. #Clients.PendingList() .. " pending, " .. Rpc.Stats.Requests .. " requests handled")
+	local Visitors = 0
+	for _ in pairs(Rpc.Visitors) do Visitors = Visitors + 1 end
+	local Settings = Server.Settings()
+	print((Settings.Public ~= false and ("Public: visitors may " .. (Settings.Visitors == "read" and "read" or "read and write")) or "Private: pairing required")
+		.. "; " .. #Clients.List() .. " paired, " .. Visitors .. " visitors, " .. #Clients.PendingList() .. " pending, " .. Rpc.Stats.Requests .. " requests")
 elseif (Command == "pending") then
 	local List = Clients.PendingList()
 	if (#List == 0) then print("No pairing requests.") end
@@ -3447,6 +3453,11 @@ elseif (Command == "set" and Args[2] and Args[3]) then
 		Settings.StorageRoot = "/" .. fs.combine(Value, "")
 	elseif (Key == "quota") then
 		Settings.QuotaMB = tonumber(Value) or 0
+	elseif (Key == "public") then
+		Settings.Public = Value == "on" or Value == "true" or Value == "yes"
+	elseif (Key == "visitors") then
+		if (Value ~= "read" and Value ~= "write") then return printError("Use read or write.") end
+		Settings.Visitors = Value
 	elseif (Key == "diskmode") then
 		if (not Volumes.Modes[Value]) then return printError("Use pool, share or off.") end
 		Settings.DiskMode = Value
@@ -3458,7 +3469,7 @@ elseif (Command == "set" and Args[2] and Args[3]) then
 	Server.Save()
 	if (Key == "storage") then Manager.Restart("blockdrive") end
 	if (Key == "disks") then Volumes.Refresh() os.queueEvent("blockcloud_storage") end
-	if (Key == "hostname" or Key == "encrypt") then Core().Announce() end
+	if (Key == "hostname" or Key == "encrypt" or Key == "public" or Key == "visitors") then Core().Announce() end
 	print("Saved.")
 elseif (Command == "password") then
 	write("New admin password (empty for none): ")
@@ -3845,6 +3856,10 @@ Config.Defaults["cloud/server"] = {
 	ShareDisks = true,
 	DiskMode = "pool",
 	Disks = {},
+	-- Public servers let any computer in range use BlockDrive without pairing, with Visitors
+	-- ("read" or "write") access. Paired computers keep their own permission either way.
+	Public = true,
+	Visitors = "write",
 	PairingOpen = true,
 	Encrypt = true,
 	QuotaMB = 0,
@@ -3859,7 +3874,24 @@ Config.Defaults["cloud/server"] = {
 	LogLevel = "info"
 }
 
+local Migrated = false
+
+-- Servers set up before public access existed and that already have paired computers stay
+-- private: updating must never open someone's storage to everyone.
+local function Migrate()
+	Migrated = true
+	local Saved = Config.Read(fs.combine(Config.DataDir, "cloud/server.dat"))
+	if (type(Saved) ~= "table" or Saved.Public ~= nil) then return end
+	local Paired = Config.Read(fs.combine(Server.DataDir, "clients.dat"))
+	if (type(Paired) == "table" and next(Paired) ~= nil) then
+		local Settings = Config.Load("cloud/server")
+		Settings.Public = false
+		Config.Save("cloud/server")
+	end
+end
+
 function Server.Settings()
+	if (not Migrated) then Migrate() end
 	local Settings = Config.Load("cloud/server")
 	if (type(Settings.NodeID) ~= "string") then
 		Settings.NodeID = Auth.RandomHex(8)
@@ -4043,6 +4075,8 @@ Rpc.Stats = { Requests = 0, Errors = 0, Rejected = 0, Started = os.epoch("utc") 
 
 local Seen = {}
 local Buckets = {}
+-- Computers using a public server without pairing, by computer ID: last time seen.
+Rpc.Visitors = {}
 
 -- Access is "public" (no pairing needed), "read" or "write".
 function Rpc.Register(Service, Ops)
@@ -4079,8 +4113,9 @@ local function ErrorBody(Code, Detail)
 	return { Ok = false, Code = Code, Msg = Detail or Protocol.Errors[Code] or Code }
 end
 
--- Unpaired computers get a small budget of public requests, so pairing spam stays cheap.
-local function Allowed(Sender)
+-- Unpaired computers get a request budget, so spam stays cheap. Visitors on a public server
+-- transfer files (one request per 8 KB), so their budget is larger.
+local function Allowed(Sender, Limit)
 	local Now = os.epoch("utc")
 	local Bucket = Buckets[Sender]
 	if (not Bucket or Now - Bucket.Since > 10000) then
@@ -4088,7 +4123,16 @@ local function Allowed(Sender)
 		Buckets[Sender] = Bucket
 	end
 	Bucket.Count = Bucket.Count + 1
-	return Bucket.Count <= 30
+	return Bucket.Count <= (Limit or 30)
+end
+
+-- An unpaired computer on a public server. It is only ever trusted with the visitor permission.
+local function Visitor(Sender, Settings)
+	Rpc.Visitors[Sender] = os.epoch("utc")
+	return {
+		ID = "visitor-" .. Sender, ComputerID = Sender, Name = "Computer #" .. Sender, Visitor = true,
+		Permission = Settings.Visitors == "read" and "read" or "write"
+	}
 end
 
 local function Resume(Worker, ...)
@@ -4114,7 +4158,14 @@ function Rpc.Handle(Sender, Msg, ProtocolName)
 	local Service = Rpc.Services[Msg.Svc]
 	local Def = Service and Service[Msg.Op]
 	local Client, Keys
-	if (Def and Def.Access ~= "public") then
+	local Settings = BlockOS.Require("server/config").Settings()
+	if (Def and Def.Access ~= "public" and Msg.Cl == nil and Settings.Public) then
+		if (not Allowed(Sender, 400)) then
+			Rpc.Stats.Rejected = Rpc.Stats.Rejected + 1
+			return
+		end
+		Client = Visitor(Sender, Settings)
+	elseif (Def and Def.Access ~= "public") then
 		Client = Clients.Get(Msg.Cl)
 		if (not Client or Client.ComputerID ~= Sender) then
 			Rpc.Stats.Rejected = Rpc.Stats.Rejected + 1
@@ -4163,7 +4214,7 @@ function Rpc.Handle(Sender, Msg, ProtocolName)
 		Reply(Sender, ProtocolName, Msg, ErrorBody("busy"), Keys)
 		return
 	end
-	if (Client) then Clients.Touch(Client) end
+	if (Client and not Client.Visitor) then Clients.Touch(Client) end
 
 	local Entry = { Time = os.epoch("utc") }
 	Seen[SeenKey] = Entry
@@ -4211,6 +4262,9 @@ function Rpc.Cleanup()
 	end
 	for Sender, Bucket in pairs(Buckets) do
 		if (os.epoch("utc") - Bucket.Since > 60000) then Buckets[Sender] = nil end
+	end
+	for Sender, Seen in pairs(Rpc.Visitors) do
+		if (os.epoch("utc") - Seen > 3600000) then Rpc.Visitors[Sender] = nil end
 	end
 end
 
@@ -5106,6 +5160,8 @@ function Core.Node()
 		Edition = "server",
 		Encrypt = Settings.Encrypt ~= false,
 		Pairing = Settings.PairingOpen ~= false,
+		Public = Settings.Public ~= false,
+		Visitors = Settings.Visitors == "read" and "read" or "write",
 		Services = Manager and Manager.Announced() or {}
 	}
 end
@@ -5156,7 +5212,7 @@ function Core.Init(Ctx)
 			return { Status = "pending" }
 		end },
 
-		-- Paired clients call this to confirm their key still works and learn their permission.
+		-- Paired clients (and visitors on a public server) confirm access and learn their permission.
 		hello = { Access = "read", Handler = function(Req)
 			for ID, Request in pairs(Clients.Pending) do
 				if (Request.ClientID == Req.Client.ID) then Clients.Pending[ID] = nil end
@@ -5363,7 +5419,9 @@ local function Defaults()
 		Password = "",
 		Confirm = "",
 		AutoUpdate = Settings.AutoUpdate ~= false,
-		AutoInstall = Settings.AutoInstall ~= false
+		AutoInstall = Settings.AutoInstall ~= false,
+		Public = Settings.Public ~= false,
+		Visitors = Settings.Visitors == "read" and "read" or "write"
 	}
 end
 
@@ -5386,6 +5444,8 @@ local function Finish(State)
 	Settings.StorageRoot = "/" .. fs.combine(State.StorageRoot, "")
 	Settings.AutoUpdate = State.AutoUpdate
 	Settings.AutoInstall = State.AutoInstall
+	Settings.Public = State.Public ~= false
+	Settings.Visitors = State.Visitors == "read" and "read" or "write"
 	Settings.Configured = true
 	Server.Save()
 	if (State.Password ~= "") then Server.SetPassword(State.Password) end
@@ -5415,7 +5475,7 @@ function Setup.Run(Opts)
 	local Gfx = BlockOS.Require("gfx")
 	local Logo = BlockOS.Require("logo")
 	local State = Defaults()
-	local Steps = { "welcome", "identity", "storage", "admin", "updates" }
+	local Steps = { "welcome", "identity", "storage", "access", "admin", "updates" }
 	if (Opts.Install) then table.insert(Steps, "install") end
 	table.insert(Steps, "done")
 	local Page = Ui.Page.new({ Bg = "WindowBg" })
@@ -5497,6 +5557,24 @@ function Setup.Run(Opts)
 			State.StorageRoot = Item.Path
 			Input:SetValue(Item.Path)
 		end
+		Footer("Continue")
+	end
+
+	function Builders.access()
+		Heading("Who can use it", "A public server works for every computer in range straight away. A private one needs the administrator to pair each computer with a code.")
+		local Visitors
+		Page:Add(Ui.Toggle.new({ X = 3, Y = 6, Value = not State.Public, OnChange = function(_, Value)
+			State.Public = not Value
+			Visitors.Visible = State.Public
+			Page:Invalidate()
+		end }))
+		Page:Add(Ui.Label.new({ X = 9, Y = 6, Text = "Require pairing (private server)" }))
+		Visitors = Page:Add(Ui.Tabs.new({ X = 3, Y = 8, W = math.min(30, Page.W - 4), Items = { "Visitors: read only", "Read & write" },
+			Selected = State.Visitors == "read" and 1 or 2, Visible = State.Public, OnChange = function(_, Index)
+				State.Visitors = Index == 1 and "read" or "write"
+			end }))
+		Page:Add(Ui.Label.new({ X = 3, Y = 10, W = Page.W - 4, H = 3, Fg = "SubText",
+			Text = "Paired computers always keep their own permission and encrypted transfers. Change this later in Settings > Security." }))
 		Footer("Continue")
 	end
 
@@ -5588,9 +5666,12 @@ function Setup.RunText(Opts)
 		end
 	end
 	print("BlockOS Server setup")
-	for _, Step in ipairs({ "identity", "storage", "admin" }) do
+	for _, Step in ipairs({ "identity", "storage", "access", "admin" }) do
 		while (true) do
-			if (Step == "identity") then
+			if (Step == "access") then
+				write("Require pairing (private server)? (y/N): ")
+				State.Public = (read() or ""):lower():sub(1, 1) ~= "y"
+			elseif (Step == "identity") then
 				Ask("Hostname", "Hostname")
 				Ask("Display name", "DisplayName")
 			elseif (Step == "storage") then
@@ -5748,9 +5829,15 @@ function Tab.Overview(X, Y, W, H)
 		if (Client.LastSeen and os.epoch("utc") - Client.LastSeen < 600000) then Recent = Recent + 1 end
 	end
 	local Pending = #Clients.PendingList()
-	Util.Line(Row, "Clients", Pending > 0 and "warn" or nil,
-		#List .. " paired, " .. Recent .. " active recently" .. (Pending > 0 and (", " .. Pending .. " waiting to pair") or ""), X, W)
-	Util.Line(Row + 1, "Requests", nil, Rpc.Stats.Requests .. " handled, " .. Rpc.Stats.Rejected .. " rejected, " .. Rpc.Stats.Errors .. " errors", X, W)
+	local Visitors = 0
+	for _, Seen in pairs(Rpc.Visitors) do
+		if (os.epoch("utc") - Seen < 600000) then Visitors = Visitors + 1 end
+	end
+	Util.Line(Row, "Access", nil, Util.AccessText(), X, W)
+	Util.Line(Row + 1, "Clients", Pending > 0 and "warn" or nil,
+		#List .. " paired, " .. Recent .. " active" .. (Server.Settings().Public ~= false and (", " .. Visitors .. " visitors") or "")
+		.. (Pending > 0 and (", " .. Pending .. " waiting to pair") or ""), X, W)
+	Util.Line(Row + 2, "Requests", nil, Rpc.Stats.Requests .. " handled, " .. Rpc.Stats.Rejected .. " rejected, " .. Rpc.Stats.Errors .. " errors", X, W)
 end
 
 function Tab.Clients(X, Y, W, H)
@@ -5800,8 +5887,17 @@ function Tab.Clients(X, Y, W, H)
 	end }))
 end
 
+-- Public: any computer may use BlockDrive with the visitor permission. Private: pairing needed.
+function Util.AccessText()
+	local Settings = Server.Settings()
+	if (Settings.Public == false) then return "Private: computers must pair" end
+	return "Public: anyone may " .. (Settings.Visitors == "read" and "read" or "read and write") .. ", no pairing"
+end
+
 function Tab.Pairing(X, Y, W, H)
 	local Settings = Server.Settings()
+	Page:Add(Ui.Label.new({ X = X, Y = Y + 1, W = W, Fg = "Accent", Text = Util.AccessText() .. (Settings.Public ~= false and " (optional)" or "") }))
+	Y, H = Y + 1, H - 1
 	Page:Add(Ui.Toggle.new({ X = X, Y = Y, Value = Settings.PairingOpen ~= false, OnChange = function(_, Value)
 		Settings.PairingOpen = Value
 		Server.Save()
@@ -5814,7 +5910,8 @@ function Tab.Pairing(X, Y, W, H)
 	end
 	if (#Items == 0) then
 		Page:Add(Ui.Label.new({ X = X, Y = Y + 2, W = W, H = 5, Fg = "SubText",
-			Text = "No computers are waiting. When one asks to pair, it shows an 8-character code: approve the request here and type that code to confirm it is the right computer." }))
+			Text = "No computers are waiting. When one asks to pair, it shows an 8-character code: approve the request here and type that code to confirm it is the right computer."
+				.. (Settings.Public ~= false and " On a public server, pairing gives a computer its own permission and encrypted transfers." or "") }))
 		return
 	end
 	local List = Page:Add(Ui.List.new({ X = X, Y = Y + 2, W = W, H = H - 4, Items = Items, Bg = "Panel" }))
@@ -6013,6 +6110,25 @@ end
 
 function Section.Security(X, Y, W)
 	local Settings = Server.Settings()
+	-- Pairing is optional unless required here; visitors get the permission chosen below.
+	Page:Add(Ui.Toggle.new({ X = X, Y = Y, Value = Settings.Public == false, OnChange = function(_, Value)
+		Settings.Public = not Value
+		Server.Save()
+		Util.Core().Announce()
+		Log.Info("auth", Value and "Pairing is now required (private server)" or "Server is now public: no pairing needed")
+		Build()
+	end }))
+	Page:Add(Ui.Label.new({ X = X + 5, Y = Y, W = W - 5, Text = "Require pairing (private server)" }))
+	if (Settings.Public ~= false) then
+		Page:Add(Ui.Label.new({ X = X, Y = Y + 1, Text = "Visitors" }))
+		Page:Add(Ui.Tabs.new({ X = X + 11, Y = Y + 1, W = math.min(26, W - 11), Items = { "Read only", "Read & write" },
+			Selected = Settings.Visitors == "read" and 1 or 2, OnChange = function(_, Index)
+				Settings.Visitors = Index == 1 and "read" or "write"
+				Server.Save()
+				Util.Core().Announce()
+			end }))
+	end
+	Y = Y + 3
 	Util.Switch(X, Y, W, "Accept pairing requests", "PairingOpen")
 	Util.Switch(X, Y + 2, W, "Encrypt file transfers", "Encrypt", function()
 		Util.Core().Announce()
@@ -7006,6 +7122,8 @@ do
 		local Arg = Args[Index]
 		if (Arg == "--yes" or Arg == "-y") then
 			Options.Yes = true
+		elseif (Arg == "--private") then
+			Options.Private = true
 		elseif (Arg:sub(1, 2) == "--" and Args[Index + 1]) then
 			Options[Arg:sub(3)] = Args[Index + 1]
 			Index = Index + 1
@@ -7167,7 +7285,9 @@ if (Options.Yes) then
 		StorageRoot = Options.storage or "/blockcloud/storage",
 		Password = Options.password or "",
 		AutoUpdate = true,
-		AutoInstall = true
+		AutoInstall = true,
+		Public = not Options.Private,
+		Visitors = Options.visitors == "read" and "read" or "write"
 	}
 	if (not Server.ValidHostname(State.Hostname)) then State.Hostname = "server" .. os.getComputerID() end
 	Setup.Finish(State)

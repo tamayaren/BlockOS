@@ -106,6 +106,9 @@ function Act.Load(Quiet)
 		if (S.Server ~= Server or S.Remote ~= Remote) then return end
 		if (not Listing) then
 			S.Entries = nil
+			if (Err and Err.Code == "not_paired" and not Server.Key) then
+				Err = { Code = "not_paired", Message = Client.Title(Server) .. " is no longer public. Choose Pair with Code in the menu." }
+			end
 			Fail(Err)
 			if (Err and Err.Code == "not_found" and Remote ~= "") then
 				S.Remote = Path.Parent(Remote)
@@ -128,7 +131,7 @@ function Act.Open(Server, Remote, SkipHistory)
 	S.Server, S.Remote, S.Mode = Server, Remote or "", "browse"
 	S.Entries = nil
 	BlockOS.SetTitle("BlockDrive \7 " .. Client.Title(Server))
-	Act.Load(S.Status ~= nil and S.Status:find("^Paired") ~= nil)
+	Act.Load(S.Status ~= nil and (S.Status:find("^Paired") ~= nil or S.Status:find("^Connected") ~= nil))
 end
 
 function Act.History(From, To)
@@ -281,17 +284,19 @@ function Act.ServerInfo()
 		Say("")
 		Ui.Alert(Client.Title(Server), table.concat({
 			"Hostname: " .. tostring(Server.Hostname) .. " (computer #" .. Server.ComputerID .. ")",
-			"Access: " .. (Info.Permission == "write" and "read and write" or "read only"),
+			"Access: " .. (Server.Key and "paired, " or "public, not paired, ") .. (Info.Permission == "write" and "read and write" or "read only"),
 			"Free: " .. Gfx.FormatSize(Info.Free) .. (Info.Capacity and (" of " .. Gfx.FormatSize(Info.Capacity)) or ""),
 			"Used: " .. Gfx.FormatSize(Info.Used or 0) .. ((Info.Quota or 0) > 0 and (" (quota " .. Gfx.FormatSize(Info.Quota) .. ")") or ""),
-			"Encryption: " .. (Server.Encrypt and "on" or "off")
+			"Encryption: " .. (Server.Key and (Server.Encrypt and "on" or "off") or "off until paired")
 		}, "\n"))
 	end)
 end
 
 function Act.Forget()
 	local Server = S.Server
-	if (not Server or not Ui.Confirm("Forget Server", "Unpair from " .. Client.Title(Server) .. "? You will need the administrator to pair again.", "Forget")) then return end
+	local Question = Server and (Server.Key and ("Unpair from " .. Client.Title(Server) .. "? You will need the administrator to pair again.")
+		or ("Remove " .. Client.Title(Server) .. " from BlockDrive? You can connect again while it is public."))
+	if (not Server or not Ui.Confirm("Forget Server", Question, "Forget")) then return end
 	Run("Unpairing...", function() Client.Forget(Server.NodeID, true) return true end, function()
 		S.Server, S.Entries, S.Remote = nil, nil, ""
 		os.queueEvent("blockcloud_paired")
@@ -476,9 +481,19 @@ function Act.Discover()
 	end)
 end
 
-function Act.Pair(Node)
-	if (Node.Paired) then
+-- Public servers are added straight away; others (or WithCode) go through pairing.
+function Act.Pair(Node, WithCode)
+	if (Node.Paired and not WithCode) then
 		Act.Open(Client.Get(Node.NodeID), "")
+		return
+	end
+	if (Node.Public and not WithCode) then
+		Run("Connecting to " .. Node.Name .. "...", function() return Client.Connect(Node) end, function(Server, Err)
+			if (not Server) then return Fail(Err) end
+			os.queueEvent("blockcloud_paired")
+			Say("Connected to " .. Client.Title(Server) .. " (public, " .. (Server.Permission == "write" and "read and write" or "read only") .. ")")
+			Act.Open(Server, "")
+		end)
 		return
 	end
 	local Name = Ui.Prompt("Pair with " .. Node.Name, "Name for this computer:", os.getComputerLabel() or ("Computer " .. os.getComputerID()))
@@ -507,15 +522,15 @@ end
 
 function View.Add(X, Y, W, H)
 	Page:Add(Ui.Label.new({ X = X, Y = Y, W = W, Fg = "Accent", Text = "Add a BlockCloud server" }))
-	Page:Add(Ui.Label.new({ X = X, Y = Y + 1, W = W, H = 2, Fg = "SubText", Text = "Servers in modem range. Pick one to ask its administrator for access." }))
+	Page:Add(Ui.Label.new({ X = X, Y = Y + 1, W = W, H = 2, Fg = "SubText", Text = "Public servers connect at once. Others need a pairing code." }))
 	local Items = {}
 	for _, Node in ipairs(S.Found or {}) do
-		table.insert(Items, { Text = Node.Name .. " (" .. Node.Hostname .. ")", Right = Node.Paired and "paired" or (Node.Pairing and "" or "closed"), Icon = "\15", IconFg = colors.cyan, Node = Node })
+		table.insert(Items, { Text = Node.Name .. " (" .. Node.Hostname .. ")", Right = Node.Paired and "added" or (Node.Public and "public" or (Node.Pairing and "pair" or "closed")), Icon = "\15", IconFg = colors.cyan, Node = Node })
 	end
 	local List = Page:Add(Ui.List.new({ X = X, Y = Y + 4, W = W, H = math.max(1, H - 6), Items = Items, Bg = "Panel" }))
 	List.OnActivate = function(_, _, Item) Act.Pair(Item.Node) end
 	Page:Add(Ui.Button.new({ X = X, Y = Y + H - 1, Text = " Search Again ", OnClick = Act.Discover }))
-	Page:Add(Ui.Button.new({ X = X + 15, Y = Y + H - 1, Text = " Pair ", Style = "primary", OnClick = function()
+	Page:Add(Ui.Button.new({ X = X + 15, Y = Y + H - 1, Text = " Connect ", Style = "primary", OnClick = function()
 		local Item = List.Items[List.Selected]
 		if (Item) then Act.Pair(Item.Node) end
 	end }))
@@ -629,17 +644,22 @@ function Act.FileMenu(Entry, X, Y)
 end
 
 function Act.MainMenu(X, Y)
-	local Options = { "Add Server...", { Text = "Server Info", Disabled = not S.Server }, { Text = "Forget Server...", Disabled = not S.Server }, "-", "Check for Updates", "About BlockDrive" }
+	local Options = { "Add Server...", { Text = "Server Info", Disabled = not S.Server }, { Text = "Pair with Code...", Disabled = not S.Server or S.Server.Key ~= nil },
+		{ Text = "Forget Server...", Disabled = not S.Server }, "-", "Check for Updates", "About BlockDrive" }
 	local Index = Ui.ContextMenu(X, Y, Options)
 	if (Index == 1) then
 		Act.Discover()
 	elseif (Index == 2) then
 		Act.ServerInfo()
 	elseif (Index == 3) then
+		-- A public server, paired for this computer's own permission and encrypted transfers.
+		S.Mode = "add"
+		Act.Pair(Client.NodeOf(S.Server), true)
+	elseif (Index == 4) then
 		Act.Forget()
-	elseif (Index == 5) then
-		Act.Update()
 	elseif (Index == 6) then
+		Act.Update()
+	elseif (Index == 7) then
 		Ui.Alert("BlockDrive", "BlockDrive " .. Act.Version() .. "\nNetwork storage on BlockCloud servers in the Data Center, over rednet.")
 	end
 end

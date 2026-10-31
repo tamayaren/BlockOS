@@ -154,6 +154,8 @@ function Client.HandleAnnounce(Sender, Message)
 		Version = tostring(Node.Version or "?"),
 		Encrypt = Node.Encrypt ~= false,
 		Pairing = Node.Pairing ~= false,
+		Public = Node.Public == true,
+		Visitors = Node.Visitors == "read" and "read" or "write",
 		Services = type(Node.Services) == "table" and Node.Services or {}
 	}
 	local Server = Client.Get(Entry.NodeID)
@@ -166,13 +168,19 @@ function Client.HandleAnnounce(Sender, Message)
 		Server.Name = Entry.Name
 		Server.Encrypt = Entry.Encrypt
 		Server.Services = Entry.Services
+		Server.ServerPublic = Entry.Public
 		Mark(Server, true)
 	end
 	return Entry
 end
 
+-- Paired servers get signed (and maybe encrypted) requests; public ones without a pairing get
+-- plain requests and are answered with the visitor permission.
 local function Options(Server, Opts)
-	local Result = { Keys = Auth.Keys(Server.Key), ClientID = Server.ClientID, Encrypt = Server.Encrypt }
+	local Result = {}
+	if (Server.Key) then
+		Result = { Keys = Auth.Keys(Server.Key), ClientID = Server.ClientID, Encrypt = Server.Encrypt }
+	end
 	for Key, Value in pairs(Opts or {}) do Result[Key] = Value end
 	return Result
 end
@@ -198,6 +206,7 @@ function Client.Hello(Server)
 	if (not Result) then return nil, Err end
 	Server.Permission = Result.Permission
 	if (type(Result.Node) == "table") then
+		Server.ServerPublic = Result.Node.Public == true
 		Server.Name = tostring(Result.Node.Name or Server.Name)
 		Server.Hostname = tostring(Result.Node.Hostname or Server.Hostname)
 		Server.Encrypt = Result.Node.Encrypt ~= false
@@ -210,10 +219,43 @@ end
 function Client.Forget(NodeID, Notify)
 	local Server = Client.Get(NodeID)
 	if (not Server) then return end
-	if (Notify) then pcall(Client.Call, Server, "core", "unpair", {}, { Retries = 0, Timeout = 1 }) end
+	if (Notify and Server.Key) then pcall(Client.Call, Server, "core", "unpair", {}, { Retries = 0, Timeout = 1 }) end
 	Load()[NodeID] = nil
 	Client.Status[NodeID] = nil
 	Client.Save()
+end
+
+--
+-- Public servers
+--
+
+-- Adds a public server (Node.Public) without pairing. Returns the server record or nil, err.
+-- Its requests are not signed or encrypted; pair with it later for that.
+function Client.Connect(Node)
+	local Result, Err = Client.Request(Node.ComputerID, "core", "hello", {})
+	if (not Result) then return nil, Err end
+	local Info = type(Result.Node) == "table" and Result.Node or Node
+	local Server = {
+		NodeID = Node.NodeID,
+		ComputerID = Node.ComputerID,
+		Hostname = tostring(Info.Hostname or Node.Hostname),
+		Name = tostring(Info.Name or Node.Name),
+		Public = true,
+		ServerPublic = true,
+		Permission = tostring(Result.Permission),
+		Services = type(Info.Services) == "table" and Info.Services or {},
+		PairedAt = os.epoch("utc")
+	}
+	Load()[Server.NodeID] = Server
+	Client.Save()
+	Mark(Server, true)
+	return Server
+end
+
+-- The node to pair with for a server already known (for example a public one): what
+-- StartPairing needs, from the saved record.
+function Client.NodeOf(Server)
+	return { NodeID = Server.NodeID, ComputerID = Server.ComputerID, Hostname = Server.Hostname, Name = Client.Title(Server), Services = Server.Services }
 end
 
 --
