@@ -15,6 +15,31 @@ screen, and a set of bundled apps.
 %:%%%'%%%%%%.%%%
 ```
 
+## BlockOS Server Edition and BlockCloud (`server` branch)
+
+This branch adds **BlockOS Server Edition** for Data Center computers and **BlockCloud**, a
+networked services platform over rednet whose first service is **BlockDrive**, shared network
+storage for BlockOS computers. Full guide: [docs/BLOCKCLOUD.md](docs/BLOCKCLOUD.md).
+
+On a Data Center computer (Advanced Computer with a wireless, ender or wired modem; any
+disk drives attached to it, also over wired modems, are pooled into its storage):
+
+```
+wget run https://raw.githubusercontent.com/tamayaren/BlockOS/server/server-install.lua
+```
+
+On each BlockOS desktop computer that should use the Data Center, get **BlockDrive**
+from the App Store (Discover > Utilities), or run:
+
+```
+wget run https://raw.githubusercontent.com/tamayaren/BlockOS/server/blockdrive-install.lua
+```
+
+Then open **BlockDrive**, choose **Add Server** and **Connect**. Servers are public by default
+(anyone in range may read and write, no pairing); a private server asks you to approve the
+computer on its console with the code BlockDrive shows. The desktop edition below is unchanged and still
+installs and updates from `main`.
+
 ## Install
 
 On an **Advanced Computer** (or Advanced Turtle), run:
@@ -174,7 +199,7 @@ reinstall, and then `reboot`. Your data is kept.
 ## Development
 
 ```
-startup.lua            boots BlockOS
+startup.lua            boots BlockOS (Server Edition when installed, otherwise the desktop)
 blockos/boot.lua       global BlockOS API, panic screen
 blockos/sys/           desktop (window manager), login, setup wizard, app runner
 blockos/lib/           ui toolkit, graphics, themes, config, users, apps, updater, chat, sha256, ...
@@ -183,17 +208,27 @@ blockos/turtle/        turtle agent
 blockos/bin/           command-line tools on the shell path
 src/installer.lua      installer template
 store/                 App Store catalog and packages
-tools/build.py         builds install.lua and manifest.cfg
+blockos/server/        BlockOS Server Edition: BlockCloud runtime, services, console
+blockos/lib/cloud/     BlockCloud protocol and client libraries
+blockos/apps/blockdrive/  BlockDrive client app
+src/*installer.lua     installer templates for each edition
+tools/build.py         builds each edition's installer and manifest
+tests/                 BlockCloud tests on headless CC: Tweaked computers
 ```
 
-After changing files, bump `blockos/version.txt` and run:
+After changing files, bump the edition's version (`blockos/version.txt` for the
+desktop, `blockos/server/version.txt` for Server Edition,
+`blockos/apps/blockdrive/version.txt` for the BlockDrive client) and run:
 
 ```
 python tools/build.py
 ```
 
-Commit the regenerated `install.lua` and `manifest.cfg`; computers pick up the
-new version on their next update check. The build stops if any Lua file has more
+Commit the regenerated installers and manifests (`install.lua`/`manifest.cfg`,
+`server-install.lua`/`server-manifest.cfg`, `blockdrive-install.lua`/
+`blockdrive-manifest.cfg`); computers pick up the new version on their next
+update check. Each manifest names its edition, and the updater refuses a
+manifest for a different edition. The build stops if any Lua file has more
 than 200 locals in scope at once (counting those of enclosing functions), since
 CC: Tweaked refuses to load it.
 

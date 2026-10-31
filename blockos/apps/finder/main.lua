@@ -4,14 +4,23 @@ local Ui = BlockOS.Require("ui")
 local Gfx = BlockOS.Require("gfx")
 local Apps = BlockOS.Require("apps")
 local Config = BlockOS.Require("config")
-local Image = BlockOS.Require("image")
-local Wallpaper = BlockOS.Require("wallpaper")
 
 local Args = { ... }
+-- Server Edition ships Finder without the desktop: no Dock, desktop shortcuts or wallpapers.
+local ServerEdition = BlockOS.Edition == "server"
+
+-- Optional libraries: missing ones (on Server Edition) simply hide their features.
+local function Optional(Name)
+	local Ok, Module = pcall(BlockOS.Require, Name)
+	return Ok and Module or nil
+end
+
+local Image = Optional("image")
+local Cloud = Optional("cloud/finder")
 
 local AppsPath = "apps:"
 local Printable = { txt = true, md = true, log = true }
-local Current = Args[1] or "/home"
+local Current = Args[1] or (BlockOS.Edition == "server" and "/" or "/home")
 local Back, Forward = {}, {}
 local Page = Ui.Page.new()
 local Sidebar, Files, PathLabel, Status
@@ -77,10 +86,19 @@ local function SidebarItems()
 		{ Text = "Apps", Path = AppsPath, Icon = "\4", IconFg = colors.purple },
 		{ Text = "Computer", Path = "/", Icon = "\8", IconFg = colors.gray }
 	}
+	if (ServerEdition) then
+		Items = { { Text = "Locations", Header = true }, { Text = "Computer", Path = "/", Icon = "\8", IconFg = colors.gray } }
+	end
 	for _, Side in ipairs(peripheral.getNames()) do
 		if (peripheral.getType(Side) == "drive" and disk.hasData(Side)) then
 			local Mount = disk.getMountPath(Side)
 			table.insert(Items, { Text = disk.getLabel(Side) or Mount, Path = "/" .. Mount, Icon = "\22", IconFg = colors.gray, Side = Side })
+		end
+	end
+	if (Cloud) then
+		local Ok, Places = pcall(Cloud.Places)
+		for _, Place in ipairs(Ok and Places or {}) do
+			table.insert(Items, Place)
 		end
 	end
 	return Items
@@ -133,8 +151,12 @@ function Refresh()
 		for _, Name in ipairs(Names) do
 			local Path = fs.combine(Current, Name)
 			local Kind = KindOf(Path)
-			local Entry = { Text = Name, Icon = Kind.Icon, IconFg = Kind.Fg, Path = "/" .. Path, IsDir = fs.isDir(Path) }
-			if (Entry.IsDir) then
+			-- BlockDrive's staging folder is internal; hide it rather than invite edits.
+			if (ServerEdition and Name == ".blockcloud") then Kind = nil end
+			local Entry = Kind and { Text = Name, Icon = Kind.Icon, IconFg = Kind.Fg, Path = "/" .. Path, IsDir = fs.isDir(Path) }
+			if (not Entry) then
+				-- Hidden.
+			elseif (Entry.IsDir) then
 				Entry.Right = "--"
 				table.insert(Dirs, Entry)
 			else
@@ -230,6 +252,7 @@ local function GetInfo(Item)
 end
 
 local function SetWallpaper(Path)
+	local Wallpaper = BlockOS.Require("wallpaper")
 	if (not Image.Load(Path)) then
 		Ui.Alert("Set as Wallpaper", fs.getName(Path) .. " is not a picture BlockOS can read.")
 		return
@@ -246,6 +269,7 @@ local function AppMenu(Item, X, Y)
 	local Pinned = Apps.IsPinned(App.ID)
 	local OnDesktop = Apps.HasShortcut(Apps.AppShortcut(App.ID))
 	local Options = { "Open", "Open Full Screen", "-", Pinned and "Remove from Dock" or "Keep in Dock", OnDesktop and "Remove from Desktop" or "Add to Desktop", "Add to Login Items", "Get Info" }
+	if (ServerEdition) then Options = { "Open", "Get Info" } end
 	if (not App.System) then
 		table.insert(Options, "-")
 		table.insert(Options, "Uninstall")
@@ -321,12 +345,16 @@ local function FileMenu(Item, X, Y)
 		{ Text = "Get Info" },
 		{ Text = "Delete", Disabled = Locked }
 	}
+	if (ServerEdition) then table.remove(Options, 11) end
 	local Extension = (fs.getName(Item.Path):match("%.(%w+)$") or ""):lower()
-	if (not Item.IsDir and Printable[Extension]) then
+	if (not Item.IsDir and Printable[Extension] and not ServerEdition) then
 		table.insert(Options, 4, { Text = "Print" })
 	end
-	if (not Item.IsDir and Image.IsImage(Item.Path)) then
+	if (not Item.IsDir and Image and Image.IsImage(Item.Path) and not ServerEdition) then
 		table.insert(Options, 4, { Text = "Set as Wallpaper" })
+	end
+	if (not Item.IsDir and Cloud and Cloud.CanUpload()) then
+		table.insert(Options, 4, { Text = "Upload to BlockDrive..." })
 	end
 	local Index = Ui.ContextMenu(X, Y, Options)
 	local Choice = Index and Options[Index].Text
@@ -340,6 +368,8 @@ local function FileMenu(Item, X, Y)
 		BlockOS.Launch("print", { Item.Path })
 	elseif (Choice == "Set as Wallpaper") then
 		SetWallpaper(Item.Path)
+	elseif (Choice == "Upload to BlockDrive...") then
+		Cloud.Upload(Item.Path)
 	elseif (Choice == "Add to Desktop" or Choice == "Remove from Desktop") then
 		Apps.SetShortcut(Item.Path, not OnDesktop)
 	elseif (Choice == "Rename") then
@@ -408,6 +438,11 @@ function Page:OnLayout(W, H)
 	end
 	Sidebar.OnActivate = function(_, _, Item)
 		if (Item.Header) then return end
+		if (Item.Launch) then
+			BlockOS.Launch(Item.Launch[1], Item.Launch[2])
+			Sidebar.Selected = 0
+			return
+		end
 		Navigate(Item.Path)
 	end
 	Sidebar.OnContext = function(_, _, Item, X, Y)
@@ -437,7 +472,7 @@ function Page:OnEvent(Name, A)
 			DeleteItem(Files.Items[Files.Selected])
 			return true
 		end
-	elseif (Name == "disk" or Name == "disk_eject" or Name == "blockos_apps" or Name == "peripheral" or Name == "peripheral_detach") then
+	elseif (Name == "disk" or Name == "disk_eject" or Name == "blockos_apps" or Name == "peripheral" or Name == "peripheral_detach" or Name == "blockcloud_paired") then
 		Refresh()
 		return true
 	elseif (Name == "blockos_open") then

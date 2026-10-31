@@ -1,18 +1,76 @@
-"""Builds the BlockOS release files.
+"""Builds the BlockOS release files for each edition.
 
 Writes, at the repository root:
-  install.lua   single-file installer with every BlockOS file bundled inside
-  manifest.cfg  the update manifest read by blockos/lib/updater.lua
+  install.lua             desktop installer with every desktop file bundled inside
+  manifest.cfg            desktop update manifest read by blockos/lib/updater.lua
+  server-install.lua      BlockOS Server Edition installer (BlockCloud + BlockDrive)
+  server-manifest.cfg     Server Edition update manifest
+  blockdrive-install.lua  BlockDrive client installer for existing desktop computers
+  blockdrive-manifest.cfg BlockDrive client update manifest
+  store/packages/blockdrive.lua  BlockDrive for the App Store (app + client library in one file)
 
 Run from anywhere: python tools/build.py
+  --list <edition>  print an edition's files and exit (used by tests/run.py)
 """
 
+import fnmatch
 import pathlib
 import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 EXCLUDED_DIRS = {"blockos/data", "blockos/userapps", "blockos/.update"}
+
+# Each edition: which files it ships, where its version comes from, and what it writes.
+# Server Edition carries only what a Data Center computer needs: no desktop, dock, Launchpad
+# or bundled apps besides Finder.
+EDITIONS = {
+    "desktop": {
+        "include": ["startup.lua", "blockos/*"],
+        "exclude": ["blockos/server/*"],
+        "version": "blockos/version.txt",
+        "template": "src/installer.lua",
+        "installer": "install.lua",
+        "manifest": "manifest.cfg",
+    },
+    "server": {
+        "include": [
+            "startup.lua",
+            "blockos/server/*",
+            "blockos/lib/cloud/*",
+            "blockos/lib/config.lua",
+            "blockos/lib/gfx.lua",
+            "blockos/lib/theme.lua",
+            "blockos/lib/ui.lua",
+            "blockos/lib/sha256.lua",
+            "blockos/lib/updater.lua",
+            "blockos/lib/logo.lua",
+            "blockos/lib/apps.lua",
+            "blockos/apps/finder/*",
+            "blockos/sys/run.lua",
+            "blockos/bin/open.lua",
+        ],
+        "exclude": [
+            "blockos/server/version.txt",
+            "blockos/lib/cloud/client.lua",
+            "blockos/lib/cloud/transfer.lua",
+            "blockos/lib/cloud/drive.lua",
+            "blockos/lib/cloud/tasks.lua",
+        ],
+        "version": "blockos/server/version.txt",
+        "template": "src/server-installer.lua",
+        "installer": "server-install.lua",
+        "manifest": "server-manifest.cfg",
+    },
+    "blockdrive": {
+        "include": ["blockos/lib/cloud/*", "blockos/apps/blockdrive/*", "blockos/bin/bdrive.lua"],
+        "exclude": [],
+        "version": "blockos/apps/blockdrive/version.txt",
+        "template": "src/blockdrive-installer.lua",
+        "installer": "blockdrive-install.lua",
+        "manifest": "blockdrive-manifest.cfg",
+    },
+}
 
 # CC: Tweaked's Lua counts every local in scope, including those of enclosing functions,
 # against a 200-local limit. Desktop-sized files get close, so builds check for it.
@@ -21,7 +79,7 @@ LOCAL_WARNING = 190
 TOKEN = re.compile(r"[A-Za-z_]\w*|\.\.\.|\d[\w.]*|\S")
 
 
-def collect_files():
+def all_files():
     files = ["startup.lua"]
     for path in sorted((ROOT / "blockos").rglob("*")):
         if not path.is_file():
@@ -31,6 +89,15 @@ def collect_files():
             continue
         files.append(relative)
     return files
+
+
+def collect_files(edition="desktop"):
+    spec = EDITIONS[edition]
+    return [
+        relative for relative in all_files()
+        if any(fnmatch.fnmatch(relative, pattern) for pattern in spec["include"])
+        and not any(fnmatch.fnmatch(relative, pattern) for pattern in spec["exclude"])
+    ]
 
 
 def read_text(relative):
@@ -157,26 +224,57 @@ def check_locals(files):
     return ok
 
 
-def main():
-    version = read_text("blockos/version.txt").strip()
-    files = collect_files()
-    if not check_locals(files):
-        sys.exit(1)
+def build(edition):
+    spec = EDITIONS[edition]
+    version = read_text(spec["version"]).strip()
+    files = collect_files(edition)
 
     bundle = "\n".join(
         "Files[" + lua_quote(relative) + "] = " + long_string(read_text(relative))
         for relative in files
     )
-    template = read_text("src/installer.lua")
+    template = read_text(spec["template"])
     installer = template.replace('"@VERSION@"', lua_quote(version)).replace("--@FILES@", bundle)
-    (ROOT / "install.lua").write_text(installer, encoding="utf-8", newline="\n")
+    (ROOT / spec["installer"]).write_text(installer, encoding="utf-8", newline="\n")
 
     entries = ",\n".join("\t\t" + lua_quote(relative) for relative in files)
-    manifest = "{\n\tVersion = " + lua_quote(version) + ",\n\tFiles = {\n" + entries + "\n\t}\n}\n"
-    (ROOT / "manifest.cfg").write_text(manifest, encoding="utf-8", newline="\n")
+    manifest = (
+        "{\n\tVersion = " + lua_quote(version) + ",\n\tEdition = " + lua_quote(edition)
+        + ",\n\tFiles = {\n" + entries + "\n\t}\n}\n"
+    )
+    (ROOT / spec["manifest"]).write_text(manifest, encoding="utf-8", newline="\n")
 
-    size = (ROOT / "install.lua").stat().st_size
-    print(f"BlockOS {version}: {len(files)} files, install.lua {size / 1024:.1f} KB")
+    size = (ROOT / spec["installer"]).stat().st_size
+    print(f"{edition} {version}: {len(files)} files, {spec['installer']} {size / 1024:.1f} KB")
+
+
+def build_store_package():
+    """The App Store installs one file per app, so BlockDrive's package bundles its library."""
+    version = read_text(EDITIONS["blockdrive"]["version"]).strip()
+    files = [f for f in collect_files("blockdrive") if f.endswith(".lua")]
+    bundle = "\n".join(
+        "Files[" + lua_quote(relative) + "] = " + long_string(read_text(relative))
+        for relative in files
+    )
+    template = read_text("src/blockdrive-package.lua")
+    package = template.replace('"@VERSION@"', lua_quote(version)).replace("--@FILES@", bundle)
+    (ROOT / "store" / "packages" / "blockdrive.lua").write_text(package, encoding="utf-8", newline="\n")
+    catalog = read_text("store/catalog.cfg")
+    entry = re.search(r'ID = "blockdrive",.*?Version = "([^"]+)"', catalog, re.S)
+    if not entry or entry.group(1) != version:
+        print(f"warning: store/catalog.cfg should list BlockDrive version {version}")
+    print(f"store package blockdrive {version}: store/packages/blockdrive.lua")
+
+
+def main():
+    if len(sys.argv) == 3 and sys.argv[1] == "--list":
+        print("\n".join(collect_files(sys.argv[2])))
+        return
+    if not check_locals(all_files()):
+        sys.exit(1)
+    for edition in EDITIONS:
+        build(edition)
+    build_store_package()
 
 
 if __name__ == "__main__":

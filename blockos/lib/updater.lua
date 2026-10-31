@@ -6,10 +6,15 @@ local Updater = {}
 
 Updater.State = { Status = "idle" }
 
+-- Which release this computer follows. The desktop uses the defaults; BlockOS Server Edition
+-- swaps in its own channel and manifest, and a manifest for a different edition is refused.
+Updater.Profile = { Edition = nil, Manifest = "manifest.cfg", Url = nil }
+
 local Protected = { ["blockos/data"] = true, ["blockos/userapps"] = true }
 
 function Updater.Base()
-	local Base = Config.Settings().UpdateURL or Config.Repo
+	local Profile = Updater.Profile
+	local Base = (Profile.Url and Profile.Url()) or Config.Settings().UpdateURL or Config.Repo
 	if (Base:sub(-1) ~= "/") then Base = Base .. "/" end
 	return Base
 end
@@ -47,7 +52,7 @@ Updater.Get = Get
 
 function Updater.Check()
 	Updater.State.Status = "checking"
-	local Body, Err = Get(Updater.Base() .. "manifest.cfg")
+	local Body, Err = Get(Updater.Base() .. (Updater.Profile.Manifest or "manifest.cfg"))
 	if (not Body) then
 		Updater.State.Status = "error"
 		Updater.State.Error = Err
@@ -58,6 +63,11 @@ function Updater.Check()
 		Updater.State.Status = "error"
 		Updater.State.Error = "Invalid manifest"
 		return nil, "Invalid manifest"
+	end
+	if ((Manifest.Edition or "desktop") ~= (Updater.Profile.Edition or "desktop")) then
+		Updater.State.Status = "error"
+		Updater.State.Error = "The update channel is for BlockOS " .. tostring(Manifest.Edition or "desktop") .. ", not this edition"
+		return nil, Updater.State.Error
 	end
 	Manifest.Newer = Updater.Compare(Config.Version(), Manifest.Version) < 0
 	Updater.State.Latest = Manifest
