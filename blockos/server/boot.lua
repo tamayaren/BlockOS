@@ -126,6 +126,12 @@ local Ok, Err = pcall(function()
 	math.randomseed(os.epoch("utc") + os.getComputerID())
 	local Server = BlockOS.Require("server/config")
 	Server.ConfigureUpdater()
+	-- CraftOS boots a disk's startup file instead of this one when any attached disk has one.
+	-- A server full of disks must not be taken over by a stray floppy, so turn that off.
+	if (settings.get("shell.allow_disk_startup") ~= false) then
+		settings.set("shell.allow_disk_startup", false)
+		settings.save()
+	end
 
 	if (not Server.Settings().Configured) then
 		local Setup = BlockOS.Load("/blockos/server/setup.lua")

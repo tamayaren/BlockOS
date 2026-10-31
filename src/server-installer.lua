@@ -87,6 +87,9 @@ local function InstallFiles(Progress)
 		if (Index % 6 == 0) then sleep(0) end
 	end
 	WriteFile("blockos/version.txt", Version)
+	-- Boot Server Edition even when a disk with its own startup file is inserted.
+	settings.set("shell.allow_disk_startup", false)
+	settings.save()
 	if (Progress) then Progress(#List, #List, "Done") end
 end
 

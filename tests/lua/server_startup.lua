@@ -34,6 +34,24 @@ local function Admin()
 			Server.Settings()[Msg.Key] = Msg.Value
 			Server.Save()
 			Reply.Ok = true
+		elseif (Msg.Op == "bcloud") then
+			Reply.Ok = shell.run("/blockos/server/bin/bcloud.lua", table.unpack(Msg.Args))
+		elseif (Msg.Op == "counts") then
+			-- Files under blockcloud/Shared on each disk.
+			local function Count(Dir)
+				if (not fs.isDir(Dir)) then return fs.exists(Dir) and 1 or 0 end
+				local Total = 0
+				for _, Name in ipairs(fs.list(Dir)) do Total = Total + Count(fs.combine(Dir, Name)) end
+				return Total
+			end
+			Reply.Counts = {}
+			for _, Side in ipairs(peripheral.getNames()) do
+				local Mount = peripheral.getType(Side) == "drive" and disk.getMountPath(Side)
+				if (Mount) then Reply.Counts[Side] = Count(fs.combine(Mount, "blockcloud/Shared")) end
+			end
+		elseif (Msg.Op == "eject") then
+			disk.eject(Msg.Side)
+			Reply.Ok = true
 		elseif (Msg.Op == "update") then
 			os.queueEvent("blockcloud_update", "install")
 			Reply.Ok = true

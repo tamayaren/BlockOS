@@ -21,7 +21,8 @@ This branch adds **BlockOS Server Edition** for Data Center computers and **Bloc
 networked services platform over rednet whose first service is **BlockDrive**, shared network
 storage for BlockOS computers. Full guide: [docs/BLOCKCLOUD.md](docs/BLOCKCLOUD.md).
 
-On a Data Center computer (Advanced Computer with a wireless, ender or wired modem):
+On a Data Center computer (Advanced Computer with a wireless, ender or wired modem; any
+disk drives attached to it, also over wired modems, are pooled into its storage):
 
 ```
 wget run https://raw.githubusercontent.com/tamayaren/BlockOS/server/server-install.lua

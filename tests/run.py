@@ -11,6 +11,7 @@ wireless network, and collects PASS/FAIL lines the Lua test scripts write to res
 
 import importlib.util
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -62,8 +63,14 @@ def copy_edition(edition, root):
         shutil.copyfile(ROOT / relative, target)
 
 
+SERVER_VERSION = (ROOT / "blockos/server/version.txt").read_text().strip()
+# A release newer than the current one, for the update test's channel.
+NEXT_VERSION = ".".join(SERVER_VERSION.split(".")[:-1] + [str(int(SERVER_VERSION.split(".")[-1]) + 1)])
+
+
 def copy_tests(root):
     shutil.copytree(ROOT / "tests" / "lua", root / "tests")
+    (root / "tests" / "versions.lua").write_text('return { Server = "%s", Next = "%s" }\n' % (SERVER_VERSION, NEXT_VERSION))
 
 
 def server(root, encrypt=True, admin=True):
@@ -173,14 +180,14 @@ def scenario_console():
     # Clicks are queued by the harness; console_check.lua inspects the result from inside.
     clicks = [
         (6, 15, 2), (8, 25, 2), (10, 35, 2), (12, 45, 2),  # Clients, Pairing, Logs, Settings tabs
-        (13, 2, 6), (14, 2, 8), (15, 2, 9), (16, 5, 2),    # settings sections, back to Overview
+        (13, 2, 6), (14, 2, 7), (15, 2, 9), (16, 5, 2),    # Disks, Security, Services, back to Overview
         (17, 3, 19),                                       # Finder
     ]
     events = "\n".join("event 1 %d mouse_click 1 %d %d\nsnap 1 %d" % (click + (click[0] - .2,)) for click in clicks)
     return run("console", [
         (1, "server", lambda r: server(r, admin=False), {"screen"}),
         (2, "check", lambda r: client(r, "console_check"), {"wait"}),
-    ], extra=events, timeout=40)
+    ], extra=events + "\nwired 1 back 12 %s" % (OUT / "console" / "drives"), timeout=40)
 
 
 def scenario_gui():
@@ -238,7 +245,9 @@ def scenario_install():
             and '"pw"' not in (base / "computer1/blockos/data/cloud/server.dat").read_text()),
         ("fresh: no desktop files installed", not (base / "computer1/blockos/sys/desktop.lua").exists()
             and not (base / "computer1/blockos/apps/messages").exists()),
-        ("fresh: version file written", (base / "computer1/blockos/version.txt").read_text().strip() == "1.0.0"),
+        ("fresh: booting from floppies turned off", bool(re.search(r'"shell\.allow_disk_startup"\s*\]\s*=\s*false',
+            (base / "computer1/.settings").read_text() if (base / "computer1/.settings").exists() else ""))),
+        ("fresh: version file written", (base / "computer1/blockos/version.txt").read_text().strip() == SERVER_VERSION),
         ("desktop: replaced by Server Edition", (base / "computer2/blockos/server/boot.lua").exists()
             and not (base / "computer2/blockos/sys/desktop.lua").exists()
             and not (base / "computer2/blockos/apps/btunes").exists()),
@@ -306,12 +315,12 @@ def scenario_update():
     import threading
     channel = OUT / "update-channel"
     shutil.rmtree(channel, ignore_errors=True)
-    # A "server" channel offering 1.0.1, and a broken one that serves a desktop manifest.
+    # A "server" channel offering the next release, and a broken one serving a desktop manifest.
     good, bad = channel / "good", channel / "bad"
     copy_edition("server", good)
     files = build.collect_files("server")
     entries = ",\n".join('\t\t"%s"' % f for f in files)
-    (good / "server-manifest.cfg").write_text('{\n\tVersion = "1.0.1",\n\tEdition = "server",\n\tFiles = {\n%s\n\t}\n}\n' % entries)
+    (good / "server-manifest.cfg").write_text('{\n\tVersion = "%s",\n\tEdition = "server",\n\tFiles = {\n%s\n\t}\n}\n' % (NEXT_VERSION, entries))
     bad.mkdir(parents=True)
     (bad / "server-manifest.cfg").write_text('{ Version = "9.9.9", Edition = "desktop", Files = { "startup.lua" } }')
     class Quiet(http.server.SimpleHTTPRequestHandler):
@@ -340,8 +349,9 @@ def scenario_update():
     root = OUT / "update" / "computer1"
     log = (root / "blockos/data/cloud/logs/server.log").read_text()
     checks = [
-        ("update: restarted by itself into 1.0.1", "Restarting to finish installing 1.0.1" in log and "BlockOS Server 1.0.1 starting" in log),
-        ("update: version file updated", (root / "blockos/version.txt").read_text().strip() == "1.0.1"),
+        ("update: restarted by itself into the new release", "Restarting to finish installing " + NEXT_VERSION in log
+            and "BlockOS Server %s starting" % NEXT_VERSION in log),
+        ("update: version file updated", (root / "blockos/version.txt").read_text().strip() == NEXT_VERSION),
         ("update: stored files kept", (root / "blockcloud/storage/Shared/keep.txt").read_text() == "still here"),
         ("update: settings kept", "UpdateURL" in (root / "blockos/data/cloud/server.dat").read_text()),
     ]
@@ -429,10 +439,73 @@ def scenario_store():
     return failed
 
 
+def scenario_disks():
+    """Storage pooled over a floppy on the side and three on a wired modem."""
+    base = OUT / "disks"
+
+    def on_floppy(root):
+        server(root)
+        config = root / "blockos" / "data" / "cloud" / "server.dat"
+        config.write_text(config.read_text().replace('StorageRoot = "/blockcloud/storage"', 'StorageRoot = "/disk/blockcloud"'))
+
+    drives = "drive 1 left %s 7 Primary\ndrive 1 right %s 8 -\nwired 1 back 3 %s\ninsert 1 right 40\ninsert 1 drive_0 40\ninsert 1 drive_2 40" % (
+        base / "drive7", base / "drive8", base / "rack")
+    failed = run("disks", [
+        (1, "server", on_floppy, {"basic"}),
+        (2, "client", lambda r: client(r, "client_disks"), {"wait"}),
+    ], extra=drives, timeout=120)
+    disks = [base / "drive7", base / "drive8"] + [base / "rack" / ("drive_%d" % i) for i in range(3)]
+    copies = {}
+    for folder in disks:
+        for path in folder.rglob("part*.bin"):
+            if ".blockcloud" not in path.parts:
+                copies.setdefault(path.name, []).append(path)
+    used = sum(1 for folder in disks if any(folder.rglob("part*.bin")))
+    checks = [
+        ("pool: files really spread over the disks", used >= 4, used),
+        ("pool: one copy of each file after the overwrite moved it", all(len(v) == 1 for v in copies.values()) and len(copies) == 6,
+            {k: len(v) for k, v in copies.items()}),
+        ("pool: nothing written outside the disks' blockcloud folders",
+            all(sorted(p.name for p in folder.iterdir()) == ["blockcloud"] for folder in disks if folder.exists())),
+        ("pool: own-share disk stores at its root", (base / "rack/drive_1/blockcloud/solo.txt").exists()),
+    ]
+    for name, ok, *detail in checks:
+        print("  [files] %s %s%s" % ("PASS" if ok else "FAIL", name, "" if ok else ": %s" % detail))
+        failed += not ok
+    return failed
+
+
+def scenario_rack():
+    """100 drives on a wired modem, pooled, with the main storage on the first floppy."""
+    base = OUT / "rack"
+
+    def on_floppy(root):
+        server(root)
+        config = root / "blockos" / "data" / "cloud" / "server.dat"
+        config.write_text(config.read_text().replace('StorageRoot = "/blockcloud/storage"', 'StorageRoot = "/disk/blockcloud"'))
+
+    failed = run("rack", [
+        (1, "server", on_floppy, {"basic"}),
+        (2, "client", lambda r: client(r, "client_rack"), {"wait"}),
+    ], extra="wired 1 back 100 %s" % (base / "drives"), timeout=240)
+    used = sum(1 for folder in (base / "drives").iterdir() if any(folder.rglob("block*.bin")))
+    log = (base / "computer1/blockos/data/cloud/logs/server.log").read_text()
+    checks = [
+        ("rack: files spread over many disks (%d)" % used, used >= 30),
+        ("rack: one summary log line for the disks, not one per disk", "99 disks: 99 pooled" in log and log.count("Using disk") == 0),
+    ]
+    for name, ok in checks:
+        print("  [files] %s %s" % ("PASS" if ok else "FAIL", name))
+        failed += not ok
+    return failed
+
+
 SCENARIOS = {
     "unit": scenario_unit,
     "vertical": scenario_vertical,
     "network": scenario_network,
+    "disks": scenario_disks,
+    "rack": scenario_rack,
     "console": scenario_console,
     "gui": scenario_gui,
     "store": scenario_store,
