@@ -1,19 +1,10 @@
 # BlockOS
+![Lock Screen](assets/readme.gif)
 
 A macOS-inspired desktop operating system for **Advanced Computers** in
 [CC: Tweaked](https://tweaked.cc). BlockOS gives you a menu bar, a dock, movable
 windows with traffic-light buttons and full-screen mode, a Launchpad, a login
 screen, and a set of bundled apps.
-
-```
-################
-##%####%#####
-%.%%#%%%%.%%
-%%%:%%%'%%%%
-%.%%%%:%%%%.%
-%%%.%%%%%:%%%%.%
-%:%%%'%%%%%%.%%%
-```
 
 ## Install
 
@@ -40,6 +31,8 @@ turtle over rednet (basic turtles get the agent automatically).
 
 ## The desktop
 
+![Desktop](assets/desktop.gif)
+
 | Area | What it does |
 | --- | --- |
 | Menu bar | Block logo menu (About, Settings, App Store, Force Quit, Lock, Log Out, Restart, Shut Down), the app's name, **Go** and **Window** menus, an update arrow when one is available, the clock, and a Show Desktop sliver in the top-right corner that hides every window (click it again to bring them back). Solid, clear (the wallpaper shows through) or blur (the wallpaper's colours smoothed into soft blocks) in **Settings → Appearance**. |
@@ -50,6 +43,7 @@ turtle over rednet (basic turtles get the agent automatically).
 | Desktop | Right-click for New Terminal, Finder, Change Wallpaper, Settings. Shortcuts to apps, files and folders line up down the left: click to select, double-click to open, right-click to open, edit, show in Finder, remove the shortcut or delete the file. |
 | Lock screen | Date and a large clock over an animated screensaver, your name and a password field. The button in the bottom-right corner restarts or shuts down. Pick the screensaver colours in **Settings → Lock Screen** (your accent colour by default). |
 
+![Animations](assets/animations.gif)
 ### Animations
 
 Windows open out of their dock icon and minimize back into it, Launchpad
@@ -72,6 +66,7 @@ bar. Turn animations off in **Settings → Dock** if your server is slow.
 | Ctrl+Shift+D | Show Desktop |
 | Ctrl+Shift+L | Lock |
 
+![App Store](assets/appStore.gif)
 ## Bundled apps
 
 | App | Description |
