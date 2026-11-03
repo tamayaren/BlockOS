@@ -97,6 +97,17 @@ local function Migrate(Config)
 		end
 		Config.Save("settings")
 	end
+	-- Savannah ships with BlockOS 1.6.0: put it in the dock once, next to Launchpad.
+	if (not Settings.SavannahDocked) then
+		Settings.SavannahDocked = true
+		local Docked, After = false, 0
+		for Index, ID in ipairs(Settings.Dock) do
+			if (ID == "savannah") then Docked = true end
+			if (ID == "launchpad" or ID == "finder") then After = math.max(After, Index) end
+		end
+		if (not Docked) then table.insert(Settings.Dock, After + 1, "savannah") end
+		Config.Save("settings")
+	end
 end
 
 local Ok, Err = pcall(function()
