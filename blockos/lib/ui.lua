@@ -479,6 +479,8 @@ function Ui.Input:Event(Page, Name, A, X)
 		self:Insert((A:gsub("[\r\n]", "")))
 		return true
 	elseif (Name == "key") then
+		-- Shift, Ctrl and Alt alone keep the selection, so a capital letter still replaces it.
+		if (ModifierKeys[A]) then return false end
 		if (self.AllSelected and (A == keys.backspace or A == keys.delete)) then
 			self:ReplaceSelection()
 			if (self.OnChange) then self:OnChange(self.Value) end

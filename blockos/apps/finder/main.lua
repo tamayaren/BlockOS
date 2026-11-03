@@ -26,6 +26,7 @@ local Kinds = {
 	rec = { Icon = "\7", Fg = colors.red, Name = "Recording" },
 	nfp = { Icon = "\127", Fg = colors.pink, Name = "Paint image" },
 	bimg = { Icon = "\127", Fg = colors.magenta, Name = "Brocreate picture" },
+	ccmd = { Icon = "@", Fg = colors.orange, Name = "ccmd page" },
 	json = { Icon = "\7", Fg = colors.orange, Name = "JSON" },
 	cfg = { Icon = "\7", Fg = colors.orange, Name = "Config" }
 }
@@ -333,7 +334,7 @@ local function FileMenu(Item, X, Y)
 	if (Choice == "Open") then
 		OpenItem(Item)
 	elseif (Choice == "Edit") then
-		BlockOS.Launch("editor", { Item.Path })
+		BlockOS.Launch(Apps.EditorFor(Item.Path), { Item.Path })
 	elseif (Choice == "Run") then
 		BlockOS.Launch(Item.Path, {}, { Hold = true })
 	elseif (Choice == "Print") then

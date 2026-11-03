@@ -72,6 +72,7 @@ bar. Turn animations off in **Settings → Dock** if your server is slow.
 | App | Description |
 | --- | --- |
 | **Finder** | File manager with a sidebar (favourites, Applications, disks), list view, context menus, copy/cut/paste, rename, Get Info and Open in Terminal. Right-click any file, folder or app and choose **Add to Desktop** for a desktop shortcut. |
+| **Savannah** | Web browser for [ccinternet](https://github.com/tamayaren/ccinternet), the in-game internet. Tabs, favourites, history, find on page (Ctrl+F), view source, forms with file uploads and Save Page As. Opens local `.ccmd` sites from Finder as `local://` addresses to preview them before uploading. See [Savannah](#savannah). |
 | **Terminal** | A CraftOS shell in a window. Includes `bpm` (package manager) and `open`. |
 | **Editor** | Code editor with Lua syntax highlighting, selection, undo/redo, find/replace, go to line, and Run (F5). **File > Add to Desktop** puts the open script on the desktop. |
 | **App Store** | Browse catalogs, install apps from Pastebin or any URL, and manage installed apps. |
@@ -90,12 +91,56 @@ bar. Turn animations off in **Settings → Dock** if your server is slow.
 | **Devices** | Inspect this computer and every attached peripheral; toggle redstone outputs. |
 | **Recorder** | Record the screen to `.rec` files, play them back, and export a standalone player. |
 
+### Savannah
+
+Savannah needs a wireless or ender modem and a ccinternet core in range (or a wired modem on
+the core's network). Type an address such as `example.com`, `ccmd://example.com/about` or
+`domain://` (where you register a domain and upload a site). The `savannah://` pages are built
+in: `start` (favourites and frequently visited sites), `favourites`, `history` and `settings`,
+where you pick the core to use (`ccinternet` by default) and your home page.
+
+| Keys | Action |
+| --- | --- |
+| Ctrl+L | Address bar |
+| Ctrl+T / Ctrl+W | New tab / close tab |
+| Ctrl+Tab, Ctrl+1..9 | Switch tabs |
+| Ctrl+Left / Right, Backspace | Back / forward |
+| Ctrl+R | Reload (stops a page that is loading) |
+| Ctrl+F | Find on page |
+| Ctrl+D | Add to or remove from Favourites |
+| Ctrl+U | View source |
+| Ctrl+S / Ctrl+O | Save page / open a local file |
+| Tab, Enter | Move between links and fields, open the selected one |
+
+Right-click a link to open it in a new tab (or middle-click it), copy it or add it to
+Favourites. Double-click a `.ccmd` file in Finder to open it in Savannah; **Edit Page** in the
+menu opens a local page in CCDream (or Editor).
+
 ### YouTube in bTunes
 
 YouTube audio is converted to DFPWM by the community server that Minux and the
 iPod program use (`ipod-2to6magyna-uc.a.run.app`). BlockOS has no affiliation
 with it, and it can be slow or offline at times. To use another server with the
 same API, go to **bTunes → Add → Server**.
+
+### CCDream
+
+**CCDream** (App Store, *Developer*) makes websites for the ccinternet. It opens a site folder
+(new sites go in `/home/Sites`) with a file browser on the left, the page's `.ccmd` source with
+syntax highlighting in the middle and a live preview of it on the right; switch between
+**Code**, **Split** and **Preview** in the toolbar (Ctrl+P) and hide the files with Ctrl+B.
+
+* The preview updates as you type and shows the site's pictures. Click a link in it to open
+  that page's file, or press **Open** (F5) to view the page in Savannah.
+* **Insert** adds links to the site's pages, pictures from the site folder, colours and every
+  ccmd block (topbar, sidebar, paragraph, table, form, field, button). Typing `<p>`, `<table>`,
+  `<topbar>` or `<form>` adds the closing tag.
+* **File > New Page** starts a page with the homepage's topbar; **New Site** makes a starter
+  site. Right-click the file browser for new folders, renaming and deleting.
+* **File > Publish** uploads the whole site to your domain through `domain://upload` (register
+  one at `domain://` in Savannah first). It needs a modem and a running core.
+* Problems in the page (a missing title or location, unclosed tags) show in the status bar;
+  click it for the full list.
 
 ## Installing apps
 
@@ -104,7 +149,7 @@ same API, go to **bTunes → Add → Server**.
   Choose whether it opens in a window or full screen.
 * **App Store → Discover**: apps from catalogs. The default catalog is
   [`store/catalog.cfg`](store/catalog.cfg) (games such as Snake, Breakout and
-  SameGame, BlockDrive for Data Center storage, and more); add more under
+  SameGame, BlockDrive for Data Center storage, CCDream, and more); add more under
   *Sources*. BlockDrive connects to computers running BlockOS Server Edition;
   see the [`server` branch](https://github.com/tamayaren/BlockOS/tree/server)
   and its [BlockCloud guide](https://github.com/tamayaren/BlockOS/blob/server/docs/BLOCKCLOUD.md).
@@ -172,7 +217,8 @@ reinstall, and then `reboot`. Your data is kept.
 startup.lua            boots BlockOS
 blockos/boot.lua       global BlockOS API, panic screen
 blockos/sys/           desktop (window manager), login, setup wizard, app runner
-blockos/lib/           ui toolkit, graphics, themes, config, users, apps, updater, chat, sha256, ...
+blockos/lib/           ui toolkit, graphics, themes, config, users, apps, updater, chat, sha256, tasks, ...
+blockos/lib/ccinternet/ ccmd parser, layout, images and protocol from ccinternet, plus local sites
 blockos/apps/<id>/     bundled apps (app.cfg + main.lua)
 blockos/turtle/        turtle agent
 blockos/bin/           command-line tools on the shell path

@@ -160,6 +160,12 @@ function Apps.FetchPastebin(Code)
 	return Apps.Fetch("https://pastebin.com/raw/" .. Code .. "?cb=" .. ("%x"):format(math.random(0, 2 ^ 30)))
 end
 
+-- The app that edits a file: CCDream for .ccmd pages when it is installed, otherwise Editor.
+function Apps.EditorFor(Path)
+	if (tostring(Path):lower():match("%.ccmd$") and Apps.Get("ccdream")) then return "ccdream" end
+	return "editor"
+end
+
 function Apps.IsPinned(ID)
 	for _, Pinned in ipairs(Config.Settings().Dock) do
 		if (Pinned == ID) then return true end

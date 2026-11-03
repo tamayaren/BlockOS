@@ -477,6 +477,8 @@ local function OpenFile(Path)
 		Launch("notes", { Path })
 	elseif ((Extension == "bimg" or Extension == "nfp") and AppCache.brocreate) then
 		Launch("brocreate", { Path })
+	elseif (Extension == "ccmd" and AppCache.savannah) then
+		Launch("savannah", { Path })
 	elseif (Extension == "lua" or not Extension) then
 		Launch(Path, {}, { Hold = true })
 	else
@@ -934,6 +936,7 @@ Shortcuts.Icons = {
 	rec = { "\7", colors.white, colors.red },
 	nfp = { "\127", colors.white, colors.pink },
 	bimg = { "\127", colors.white, colors.magenta },
+	ccmd = { "@", colors.white, colors.orange },
 	json = { "\7", colors.white, colors.orange },
 	cfg = { "\7", colors.white, colors.orange },
 	[""] = { "\7", colors.white, colors.gray }
@@ -1616,7 +1619,7 @@ function Shortcuts.OpenMenu(Info, X, Y)
 	local Items = { { Text = "Open", Action = function() Shortcuts.Open(Info) end } }
 	if (Info.Path) then
 		if (not Info.IsDir) then
-			table.insert(Items, { Text = "Edit", Action = function() Launch("editor", { Info.Path }) end })
+			table.insert(Items, { Text = "Edit", Action = function() Launch(Apps.EditorFor(Info.Path), { Info.Path }) end })
 		end
 		table.insert(Items, { Text = "Show in Finder", Action = function() Launch("finder", { "/" .. fs.getDir(Info.Path) }) end })
 	end
