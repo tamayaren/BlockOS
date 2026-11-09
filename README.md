@@ -35,7 +35,7 @@ turtle over rednet (basic turtles get the agent automatically).
 
 | Area | What it does |
 | --- | --- |
-| Menu bar | Block logo menu (About, Settings, App Store, Force Quit, Lock, Log Out, Restart, Shut Down), the app's name, **Go** and **Window** menus, an update arrow when one is available, the clock, and a Show Desktop sliver in the top-right corner that hides every window (click it again to bring them back). Solid, clear (the wallpaper shows through) or blur (the wallpaper's colours smoothed into soft blocks) in **Settings → Appearance**. |
+| Menu bar | Block logo menu (About, Settings, App Store, Force Quit, Lock, Log Out, Restart, Shut Down), the app's name, **Go** and **Window** menus, an update arrow when one is available, the **Control Center** icon, the clock, and a Show Desktop sliver in the top-right corner that hides every window (click it again to bring them back). Solid, clear (the wallpaper shows through) or blur (the wallpaper's colours smoothed into soft blocks) in **Settings → Appearance**. |
 | Dock | Pinned apps, running apps (dot underneath) and a Messages unread badge. Right-click an icon to open, quit, keep it in the dock or add it to the desktop. Small (2 rows, the default) or large, solid or clear (no background, just the icons and running dots) in **Settings → Dock**. |
 | Windows | Drag the title bar to move, drag the bottom-right corner to resize. Red closes, yellow minimizes, green goes full screen. |
 | Full screen | Hides the dock and menu bar like macOS. Click the top-left corner, right-click or scroll up on the top row, or press Ctrl+Shift+Up to show the menu bar and the window buttons (close, minimize, exit full screen). |
@@ -43,11 +43,35 @@ turtle over rednet (basic turtles get the agent automatically).
 | Desktop | Right-click for New Terminal, Finder, Change Wallpaper, Settings. Shortcuts to apps, files and folders line up down the left: click to select, double-click to open, right-click to open, edit, show in Finder, remove the shortcut or delete the file. |
 | Lock screen | Date and a large clock over an animated screensaver, your name and a password field. The button in the bottom-right corner restarts or shuts down. Pick the screensaver colours in **Settings → Lock Screen** (your accent colour by default). |
 
+### Control Center
+
+Click the icon left of the clock in the menu bar (or press Ctrl+Shift+C) to drop down the
+Control Center:
+
+| Control | What it does |
+| --- | --- |
+| WiFi | Turns every wireless and ender modem off or back on. Same switch as **Settings → WiFi**. |
+| Do Not Disturb | Stops notification banners and sounds. Notifications still arrive and wait in the Control Center; a `z` shows next to the icon while it is on. Also in **Settings → Notifications**. |
+| Dark Mode | Switches between light and dark appearance. |
+| Lock Screen | Locks the computer. |
+| Sound | The system volume. Click or drag along the bar, or scroll over it. It scales bTunes and notification sounds. |
+| Now Playing | Shows while bTunes is playing or paused: the track, time, and previous, play/pause and next buttons. |
+| Notifications | Recent notifications, newest first. Click one to open its app, **x** to dismiss it, **Clear** to dismiss them all. Scroll for more. |
+
+**Settings → WiFi** lists every attached modem with its own switch. A modem that is off is closed
+and stays closed: nothing can open it or transmit on it (rednet, GPS or a wrapped modem) until it
+is switched back on. Wired modems ignore the WiFi switch but can be turned off on their own.
+
+Apps can feed Now Playing too: `BlockOS.Require("media").SetSource(Describe)`, where
+`Describe()` returns `{ Title, Artist, State = "playing" | "paused" | "loading" | "stopped",
+Elapsed, Total }`, and they receive `blockos_media` events with `"toggle"`, `"next"` or
+`"previous"`. Scale speaker volume by `BlockOS.Require("media").Volume()` (0 to 1).
+
 ![Animations](assets/animations.gif)
 ### Animations
 
 Windows open out of their dock icon and minimize back into it, Launchpad
-zooms open, menus and right-click menus unroll, notifications slide in from the
+zooms open, menus, right-click menus and the Control Center unroll, notifications slide in from the
 right, the lock screen bleeds in over the desktop (and the desktop back in when
 you unlock), and restarting shows a boot screen with the logo and a loading
 bar. Turn animations off in **Settings → Dock** if your server is slow.
@@ -64,6 +88,7 @@ bar. Turn animations off in **Settings → Dock** if your server is slow.
 | Ctrl+Shift+W / Q | Close window / quit app |
 | Ctrl+Shift+Up | Reveal menu bar in full screen |
 | Ctrl+Shift+D | Show Desktop |
+| Ctrl+Shift+C | Control Center |
 | Ctrl+Shift+L | Lock |
 
 ![App Store](assets/appStore.gif)
@@ -82,7 +107,7 @@ bar. Turn animations off in **Settings → Dock** if your server is slow.
 | **Print** | Print text files on an attached printer, with a page preview, page titles, copies, and ink and paper levels. Right-click a `.txt` file in Finder and choose **Print**, or use Print in Notes. |
 | **Network** | Finds nearby BlockOS computers over a wireless or ender modem and, with a GPS cluster in range, shows them on a map with distance and direction. Turn off *Let other computers find this one* (also in **Settings → Network**) to stay hidden. |
 | **bTunes** | Music player for speakers: search YouTube or paste a YouTube video or playlist link, play DFPWM links and `.dfpwm` files, and keep a library with shuffle and repeat. The **Visual** tab shows a live spectrum in sync with the speaker: **Bars** with falling peaks, **Mirror**, or a **Wave** oscilloscope (click it to switch). |
-| **Settings** | General, Storage (a usage bar split into System, Apps, Home, Data and Other, and every app by size, with Uninstall), Appearance (theme, accent, menu bar style, wallpaper incl. dark ones and a solid colour, white and black included), Dock (size, style, animations), Lock Screen, Users & Login, Notifications, Network, Login Items, Software Update. |
+| **Settings** | General, Storage (a usage bar split into System, Apps, Home, Data and Other, and every app by size, with Uninstall), Appearance (theme, accent, menu bar style, wallpaper incl. dark ones and a solid colour, white and black included), Dock (size, style, animations), Lock Screen, Users & Login, Notifications (incl. Do Not Disturb), WiFi (turn WiFi or single modems off), Network, Login Items, Software Update. |
 | **Calculator** | A four-function calculator with keyboard support. |
 | **Clock** | Large clock (real or Minecraft time), alarms, stopwatch and timer. |
 | **Reminders** | Lists, smart lists (Today, Scheduled, All, Completed) and due times like `in 10m`, `14:30` or `tomorrow 9:00`. |
