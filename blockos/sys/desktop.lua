@@ -56,7 +56,7 @@ local FadeLevel = 1
 local FullscreenHinted = false
 local DesktopHidden = nil
 
-local Redraw, ScheduleRedraw, Focus, Launch, Notify, Lock, CloseProc, Kill, OpenMenu, Multishell
+local Redraw, ScheduleRedraw, Focus, Launch, Notify, Lock, CloseProc, Kill, OpenMenu, Multishell, Control
 
 local ModifierKeys = {
 	[keys.leftCtrl] = "Ctrl", [keys.rightCtrl] = "Ctrl",
@@ -401,6 +401,7 @@ end
 
 local function ToggleLaunchpad()
 	Menu = nil
+	Control.Close()
 	if (Launchpad.Open) then
 		CloseLaunchpad()
 		return
@@ -803,13 +804,6 @@ function Draw.Topbar(Th)
 	Put(X, Name)
 	table.insert(Topbar.Regions, { X = X - 1, W = #Name + 2, Menu = "app" })
 	X = X + #Name + 2
-	for _, Title in ipairs({ "Go", "Window" }) do
-		if (X + #Title < ScreenW - 14) then
-			Put(X, Title)
-			table.insert(Topbar.Regions, { X = X - 1, W = #Title + 2, Menu = Title:lower() })
-			X = X + #Title + 2
-		end
-	end
 	-- Show Desktop sits in the very corner, like the sliver at the end of a taskbar.
 	local Right = ScreenW
 	Put(Right, "\149")
@@ -818,6 +812,15 @@ function Draw.Topbar(Th)
 	Right = Right - #Clock - 1
 	Put(Right, Clock)
 	table.insert(Topbar.Regions, { X = Right, W = #Clock, Action = "clock" })
+	-- Control Center, with a "z" beside it while Do Not Disturb is on.
+	local Icon = Config.Settings().DoNotDisturb and "z\18" or "\18"
+	Right = Right - #Icon - 2
+	if (Control.Open) then
+		Gfx.Write(Screen, Right, 1, " " .. Icon .. " ", Th.AccentFg, Th.Accent)
+	else
+		Put(Right + 1, Icon)
+	end
+	table.insert(Topbar.Regions, { X = Right, W = #Icon + 2, Action = "control" })
 	local Status = Topbar.UpdateStatus()
 	if (Status == "available" or Status == "ready") then
 		Right = Right - 3
@@ -828,6 +831,14 @@ function Draw.Topbar(Th)
 		Right = Right - 7
 		Put(Right, "\7 REC", colors.red)
 		table.insert(Topbar.Regions, { X = Right - 1, W = 7, Action = "recording" })
+	end
+	-- The menus go in whatever room the status items leave.
+	for _, Title in ipairs({ "Go", "Window" }) do
+		if (X + #Title < Right - 2) then
+			Put(X, Title)
+			table.insert(Topbar.Regions, { X = X - 1, W = #Title + 2, Menu = Title:lower() })
+			X = X + #Title + 2
+		end
 	end
 end
 
@@ -1196,7 +1207,7 @@ function Redraw()
 		Shortcuts.Draw(Th)
 	end
 	local Revealed = FullFocus and RevealActive()
-	local Overlay = Menu or Dialog or Launchpad.Open or #Toasts > 0 or Revealed or Ghost
+	local Overlay = Menu or Dialog or Launchpad.Open or #Toasts > 0 or Revealed or Ghost or Control.Open
 	for _, Proc in ipairs(Processes) do
 		Proc.Live = false
 		if (Proc.Minimized or Proc.Opening) then
@@ -1226,6 +1237,7 @@ function Redraw()
 	end
 	if (Launchpad.Open) then Draw.Launchpad(Th) end
 	Draw.Toasts(Th)
+	Control.Draw(Th)
 	if (Menu) then Draw.Menu(Th) end
 	if (Dialog) then Draw.Dialog(Th) end
 	if (Ghost) then Draw.Ghost(Th) end
@@ -1243,10 +1255,11 @@ end
 --
 
 local function PlaySound(Count)
+	local Volume = BlockOS.Require("media").Volume()
 	local Speaker = peripheral.find("speaker")
-	if (not Speaker) then return end
+	if (not Speaker or Volume <= 0) then return end
 	for _ = 1, Count or 1 do
-		pcall(Speaker.playNote, "bell", 1, 18)
+		pcall(Speaker.playNote, "bell", Volume, 18)
 	end
 end
 
@@ -1256,7 +1269,11 @@ function Notify(Title, Text, Opts)
 	table.insert(History, 1, Entry)
 	while (#History > 30) do table.remove(History) end
 	local Settings = Config.Settings()
-	if (not Settings.Notifications) then return end
+	-- Do Not Disturb keeps notifications quiet; they wait in the Control Center instead.
+	if (not Settings.Notifications or Settings.DoNotDisturb) then
+		if (Control.Open) then Redraw() end
+		return
+	end
 	table.insert(Toasts, 1, Entry)
 	while (#Toasts > 3) do table.remove(Toasts) end
 	if (QueueAnimation({ Kind = "toast", Toast = Entry })) then
@@ -1279,6 +1296,35 @@ local function Confirm(Title, Text, YesText, OnYes)
 		{ Text = "Cancel" },
 		{ Text = YesText, Primary = true, Action = OnYes }
 	})
+end
+
+-- Removes one notification from the history and the screen, or every one when Entry is nil.
+local function DismissNotification(Entry)
+	for _, List in ipairs({ History, Toasts }) do
+		for Index = #List, 1, -1 do
+			if (Entry == nil or List[Index] == Entry) then table.remove(List, Index) end
+		end
+	end
+	Redraw()
+end
+
+Control = BlockOS.Load("/blockos/sys/control.lua")({
+	Screen = function() return Screen end,
+	Size = function() return ScreenW, ScreenH end,
+	History = function() return History end,
+	Dismiss = DismissNotification,
+	Launch = function(Target, Args) Launch(Target, Args) end,
+	Lock = function() Lock() end,
+	Alive = function(ID) return FindProc(ID) ~= nil end,
+	Redraw = function() Redraw() end
+})
+
+local function ToggleControl()
+	Menu = nil
+	if (Control.Toggle() and QueueAnimation({ Kind = "control" })) then
+		Control.Reveal = 1
+	end
+	Redraw()
 end
 
 --
@@ -1399,6 +1445,7 @@ end
 local function EnterLock()
 	Menu = nil
 	Dialog = nil
+	Control.Close()
 	Launchpad.Open = false
 	Drag = nil
 	MouseTarget = nil
@@ -1700,6 +1747,8 @@ local function TopbarClick(Button, X)
 		if (X >= Region.X and X < Region.X + Region.W) then
 			if (Region.Menu) then
 				OpenMenu(Region.Menu, Region.X, 2)
+			elseif (Region.Action == "control") then
+				ToggleControl()
 			elseif (Region.Action == "clock") then
 				Launch("clock")
 			elseif (Region.Action == "desktop") then
@@ -1776,6 +1825,18 @@ function Input.Click(Button, X, Y)
 		if (Y ~= 1) then return end
 		for _, Region in ipairs(Topbar.Regions) do
 			if (Region.Menu == Current.Name and X >= Region.X and X < Region.X + Region.W) then
+				return
+			end
+		end
+	end
+	if (Control.Open) then
+		if (Control.Click(Button, X, Y)) then return end
+		-- A click outside closes the panel; on the menu bar it still opens what was clicked.
+		Control.Close()
+		Redraw()
+		if (Y ~= 1) then return end
+		for _, Region in ipairs(Topbar.Regions) do
+			if (Region.Action == "control" and X >= Region.X and X < Region.X + Region.W) then
 				return
 			end
 		end
@@ -1872,6 +1933,7 @@ function Input.Click(Button, X, Y)
 end
 
 function Input.Drag(Button, X, Y)
+	if (Control.Drag(X)) then return end
 	if (Menu) then
 		local Index = Y - Menu.Y + 1
 		if (X >= Menu.X and X < Menu.X + Menu.W and Menu.Items[Index]) then
@@ -1902,6 +1964,7 @@ function Input.Drag(Button, X, Y)
 end
 
 function Input.Up(Button, X, Y)
+	if (Control.Up()) then return end
 	if (Menu and Menu.Hover > 0 and Y ~= 1) then
 		local Index = Y - Menu.Y + 1
 		if (X >= Menu.X and X < Menu.X + Menu.W and Index == Menu.Hover) then
@@ -1926,6 +1989,10 @@ function Input.Scroll(Direction, X, Y)
 		return
 	end
 	if (Menu or Dialog) then return end
+	if (Control.Open) then
+		Control.Scroll(Direction, X, Y)
+		return
+	end
 	local FullFocus = FocusedFullscreen()
 	if (FullFocus and Y == 1 and Direction < 0) then
 		RevealTopbar()
@@ -1970,6 +2037,8 @@ local function Shortcut(Key)
 		Launch("terminal")
 	elseif (Key == keys.d) then
 		ShowDesktop()
+	elseif (Key == keys.c) then
+		ToggleControl()
 	elseif (Key == keys.up and FocusedFullscreen()) then
 		RevealTopbar()
 	else
@@ -2013,6 +2082,13 @@ function Input.Key(Name, Key, Held)
 		end
 		return
 	end
+	if (Control.Open) then
+		if (Name == "key" and not Modifier) then
+			Control.Close()
+			Redraw()
+		end
+		return
+	end
 	if (Launchpad.Open) then
 		if (Name ~= "key") then return end
 		if (Key == keys.backspace) then
@@ -2040,7 +2116,7 @@ function Input.Key(Name, Key, Held)
 end
 
 function Input.Text(Event)
-	if (Dialog or Menu) then return end
+	if (Dialog or Menu or Control.Open) then return end
 	if (Launchpad.Open) then
 		Launchpad.Query = (Launchpad.Query .. Event[2]):sub(1, 20)
 		Launchpad.Page = 1
@@ -2089,8 +2165,10 @@ local function ClockTick()
 	if (Changed) then
 		Redraw()
 	elseif (not FocusedFullscreen() and not Launchpad.Open) then
-		Draw.Topbar(Theme.Get())
-		if (Menu) then Draw.Menu(Theme.Get()) end
+		local Th = Theme.Get()
+		Draw.Topbar(Th)
+		Control.Draw(Th)
+		if (Menu) then Draw.Menu(Th) end
 		RestoreCursor()
 	end
 end
@@ -2153,6 +2231,7 @@ local function HandleEvent(Event)
 			Resume(Focused, "terminate")
 		end
 	elseif (Name == "blockos_settings" or Name == "blockos_apps") then
+		if (Name == "blockos_settings") then pcall(BlockOS.Require("wifi").Apply) end
 		RefreshApps()
 		for _, Proc in ipairs(Processes) do
 			ClampWindow(Proc)
@@ -2347,6 +2426,17 @@ function Players.menu(Animation)
 	if (Menu == Current) then Redraw() end
 end
 
+function Players.control()
+	for Frame = 1, 3 do
+		if (not Control.Open or not Control.Reveal) then return end
+		Control.Reveal = math.max(1, math.ceil(Control.H * Frame / 4))
+		Redraw()
+		Anim.Wait(FrameTime)
+	end
+	Control.Reveal = nil
+	if (Control.Open) then Redraw() end
+end
+
 function Players.launchpad(Animation)
 	local Full = { 1, 1, ScreenW, ScreenH }
 	local Seed = LaunchpadSeed()
@@ -2384,6 +2474,7 @@ local function RunAnimations()
 			Ghost = nil
 			Launchpad.Rect = nil
 			if (Menu) then Menu.Reveal = nil end
+			Control.Reveal = nil
 			PendingLock, PendingUnlock = false, false
 			if (Animation.Proc) then Animation.Proc.Opening = nil end
 			SetFadeLevel(1)
@@ -2398,6 +2489,7 @@ end
 --
 
 local function InstallAPI()
+	BlockOS.Require("wifi").Install()
 	BlockOS.Desktop = true
 	BlockOS.Shell = RootShell
 	BlockOS.Launch = function(Target, Args, Opts)
@@ -2464,6 +2556,9 @@ local function InstallAPI()
 	end
 	BlockOS.Notifications = function()
 		return History
+	end
+	BlockOS.ClearNotifications = function()
+		DismissNotification(nil)
 	end
 	BlockOS.Lock = function() Lock() end
 	BlockOS.Restart = function() Power("restart") end

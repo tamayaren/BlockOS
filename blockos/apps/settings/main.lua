@@ -1,4 +1,4 @@
--- Settings: appearance, storage, dock, users, notifications, network, login items and software update.
+-- Settings: appearance, storage, dock, users, notifications, WiFi, network, login items and software update.
 
 local Ui = BlockOS.Require("ui")
 local Gfx = BlockOS.Require("gfx")
@@ -9,6 +9,7 @@ local Users = BlockOS.Require("users")
 local Wallpaper = BlockOS.Require("wallpaper")
 local Updater = BlockOS.Require("updater")
 local Screensaver = BlockOS.Require("screensaver")
+local Wifi = BlockOS.Require("wifi")
 
 local Args = { ... }
 
@@ -24,6 +25,7 @@ local Sections = {
 	{ ID = "lockscreen", Name = "Lock Screen", Icon = "\8" },
 	{ ID = "users", Name = "Users & Login", Icon = "\2" },
 	{ ID = "notifications", Name = "Notifications", Icon = "\7" },
+	{ ID = "wifi", Name = "WiFi", Icon = "\30" },
 	{ ID = "network", Name = "Network", Icon = "\29" },
 	{ ID = "startup", Name = "Login Items", Icon = "\16" },
 	{ ID = "update", Name = "Software Update", Icon = "\24" }
@@ -466,16 +468,54 @@ end
 
 function Builders.notifications(X, Y, W, H)
 	ToggleRow(Y, "Show notifications", "Notifications")
-	ToggleRow(Y + 2, "Play a sound on speakers", "NotificationSound")
-	Page:Add(Ui.Button.new({ X = X, Y = Y + 4, Text = " Send Test ", OnClick = function()
+	-- Do Not Disturb silences banners and sounds; notifications still collect in the Control Center.
+	ToggleRow(Y + 2, "Do Not Disturb", "DoNotDisturb")
+	ToggleRow(Y + 4, "Play a sound on speakers", "NotificationSound")
+	Page:Add(Ui.Button.new({ X = X, Y = Y + 6, Text = " Send Test ", OnClick = function()
 		BlockOS.Notify("Hello from BlockOS", "Notifications are working.", { AppID = "settings", Args = { "notifications" } })
+		Build()
 	end }))
-	Page:Add(Ui.Label.new({ X = X, Y = Y + 6, Text = "Recent", Fg = "SubText" }))
+	Page:Add(Ui.Button.new({ X = X + 12, Y = Y + 6, Text = " Clear All ", OnClick = function()
+		if (BlockOS.ClearNotifications) then BlockOS.ClearNotifications() end
+		Build()
+	end }))
 	local Items = {}
 	for _, Entry in ipairs(BlockOS.Notifications and BlockOS.Notifications() or {}) do
 		table.insert(Items, { Text = Entry.Title .. ": " .. Entry.Text })
 	end
-	Page:Add(Ui.List.new({ X = X, Y = Y + 7, W = W, H = math.max(1, H - 8), Items = Items, Bg = "Panel" }))
+	if (#Items == 0) then
+		table.insert(Items, { Text = "No recent notifications" })
+	end
+	Page:Add(Ui.List.new({ X = X, Y = Y + 8, W = W, H = math.max(1, H - 9), Items = Items, Bg = "Panel" }))
+end
+
+function Builders.wifi(X, Y, W, H)
+	Page:Add(Ui.Toggle.new({ X = X, Y = Y, Value = Wifi.On(), OnChange = function(_, Value) Wifi.SetOn(Value) end }))
+	Page:Add(Ui.Label.new({ X = X + 5, Y = Y, W = W - 5, Text = "WiFi" }))
+	Page:Add(Ui.Label.new({ X = X, Y = Y + 1, W = W, H = 2, Fg = "SubText", Text = "Off closes every wireless and ender modem. Messages, Network and Savannah stay offline." }))
+	Page:Add(Ui.Label.new({ X = X, Y = Y + 4, Text = "Modems", Fg = "SubText" }))
+	local Modems = Wifi.Modems()
+	if (#Modems == 0) then
+		Page:Add(Ui.Label.new({ X = X, Y = Y + 5, W = W, H = 2, Text = "No modems attached. Attach a wireless, ender or wired modem.", Fg = "SubText" }))
+		return
+	end
+	local Off = Settings.ModemsOff or {}
+	for Index, Modem in ipairs(Modems) do
+		local Row = Y + 4 + Index
+		if (Row >= Y + H) then break end
+		local Name = Modem.Name
+		local State = "on"
+		if (Off[Name]) then
+			State = "off"
+		elseif (not Modem.Allowed) then
+			State = "WiFi off"
+		elseif (Modem.Open) then
+			State = "connected"
+		end
+		Page:Add(Ui.Toggle.new({ X = X, Y = Row, Value = not Off[Name], OnChange = function(_, Value) Wifi.SetModem(Name, Value) end }))
+		Page:Add(Ui.Label.new({ X = X + 5, Y = Row, W = W - 15, Text = (Modem.Wireless and "Wireless" or "Wired") .. " (" .. Name .. ")" }))
+		Page:Add(Ui.Label.new({ X = X + W - 9, Y = Row, W = 9, Align = "right", Fg = "SubText", Text = State }))
+	end
 end
 
 function Builders.network(X, Y, W)
@@ -483,26 +523,16 @@ function Builders.network(X, Y, W)
 	Chat.Load()
 	Page:Add(Ui.Label.new({ X = X, Y = Y, W = W, Text = "Computer ID: " .. os.getComputerID() }))
 	local Row = Y + 2
-	local Found = false
-	for _, Name in ipairs(peripheral.getNames()) do
-		if (peripheral.getType(Name) == "modem") then
-			Found = true
-			local Modem = peripheral.wrap(Name)
-			local Kind = Modem.isWireless() and "Wireless modem" or "Wired modem"
-			local Open = rednet.isOpen(Name)
-			Page:Add(Ui.Label.new({ X = X, Y = Row, W = W - 10, Text = Kind .. " (" .. Name .. ")" }))
-			Page:Add(Ui.Button.new({ X = X + W - 8, Y = Row, W = 8, Text = Open and "Close" or "Open", OnClick = function()
-				if (rednet.isOpen(Name)) then rednet.close(Name) else rednet.open(Name) end
-				Build()
-			end }))
-			Row = Row + 1
+	local Modems = Wifi.Modems()
+	local Text = (#Modems == 0) and "No modems attached." or (#Modems .. (#Modems == 1 and " modem" or " modems") .. ", WiFi " .. (Wifi.On() and "on" or "off"))
+	Page:Add(Ui.Label.new({ X = X, Y = Row, W = W - 8, Text = Text, Fg = "SubText" }))
+	Page:Add(Ui.Button.new({ X = X + W - 6, Y = Row, W = 6, Text = "WiFi", OnClick = function()
+		for Index, Section in ipairs(Sections) do
+			if (Section.ID == "wifi") then Current = Index end
 		end
-	end
-	if (not Found) then
-		Page:Add(Ui.Label.new({ X = X, Y = Row, W = W, H = 2, Text = "No modems attached. Attach a wireless or ender modem to use Messages and Turtles.", Fg = "SubText" }))
-		Row = Row + 2
-	end
-	Row = Row + 1
+		Build()
+	end }))
+	Row = Row + 2
 	Page:Add(Ui.Label.new({ X = X, Y = Row, Text = "Nickname" }))
 	local Nick = Page:Add(Ui.Input.new({ X = X + 10, Y = Row, W = math.min(18, W - 18), Value = Chat.GetNick(), MaxLength = 20 }))
 	Page:Add(Ui.Button.new({ X = X + W - 6, Y = Row, W = 6, Text = "Set", OnClick = function()

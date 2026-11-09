@@ -3,6 +3,7 @@
 local Ui = BlockOS.Require("ui")
 local Gfx = BlockOS.Require("gfx")
 local Config = BlockOS.Require("config")
+local Media = BlockOS.Require("media")
 
 local Dfpwm = require("cc.audio.dfpwm")
 
@@ -180,7 +181,8 @@ local function Feed()
 			end
 		end
 		for Name, Device in pairs(Player.Pending) do
-			if (Device.playAudio(Player.Buffer, Player.Volume)) then
+			-- The system volume from the Control Center scales bTunes' own volume.
+			if (Device.playAudio(Player.Buffer, Player.Volume * Media.Volume())) then
 				Player.Pending[Name] = nil
 			end
 		end
@@ -873,6 +875,15 @@ function Page:OnEvent(Name, A, B)
 	elseif (Name == "blockos_open" and A) then
 		PlayList({ { Name = fs.getName(A), Path = A } }, 1)
 		return true
+	elseif (Name == "blockos_media") then
+		if (A == "toggle") then
+			TogglePause()
+		elseif (A == "next" and #Player.Queue > 0) then
+			TrackEnded()
+		elseif (A == "previous") then
+			Previous()
+		end
+		return true
 	elseif (Name == "key" and A == keys.space and not (Page.Focus and Page.Focus.Value)) then
 		TogglePause()
 		return true
@@ -893,8 +904,22 @@ Page:SetInterval(.1, function()
 	return Tab == 5 and Analyze()
 end)
 
+-- Tells the Control Center what is playing.
+local function Describe()
+	local Track = Player.Queue[Player.Index]
+	return {
+		Title = Track and Track.Name or "bTunes",
+		Artist = Track and Track.Artist,
+		State = Player.State,
+		Elapsed = Player.Bytes / BytesPerSecond,
+		Total = Player.Total / BytesPerSecond
+	}
+end
+Media.SetSource(Describe)
+
 if (Args[1] and fs.exists(Args[1])) then
 	PlayList({ { Name = fs.getName(Args[1]), Path = Args[1] } }, 1)
 end
 Page:Run()
 Stop()
+Media.ClearSource(Describe)
