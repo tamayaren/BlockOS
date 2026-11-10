@@ -3,6 +3,7 @@
 
 local Gfx = BlockOS.Require("gfx")
 local Theme = BlockOS.Require("theme")
+local Glass = BlockOS.Require("glass")
 
 local Ui = {}
 
@@ -1019,18 +1020,23 @@ function Ui.ContextMenu(X, Y, Items)
 	local H = #Items
 	X = math.max(1, math.min(X, ScreenW - W + 1))
 	Y = math.max(1, math.min(Y, ScreenH - H + 1))
+	-- The menu is glass over the window, sampled before the menu itself covers it.
+	local Opened = Theme.Get()
+	local Pane = Glass.Surface(Parent, X, Y, W, H, nil, Opened.MenuBg, Opened.MenuFg, Opened.MenuDim)
+	Pane.OX, Pane.OY = 1, 1
 	local Modal = Ui.Page.new({ Parent = Parent, X = X, Y = Y, W = W, H = H, Bg = "MenuBg", Unroll = true })
 	Modal.Hover = 0
 	function Modal:OnDraw(T, Th)
+		Pane:Fill(T)
 		for Index, Item in ipairs(Items) do
 			local Text = type(Item) == "table" and Item.Text or Item
 			local Disabled = type(Item) == "table" and Item.Disabled
 			if (Text == "-") then
-				Gfx.Write(T, 1, Index, string.rep("\140", W), Th.MenuDim, Th.MenuBg)
+				Pane:Write(T, 1, Index, string.rep("\140", W), "dim")
 			elseif (Index == self.Hover) then
 				Gfx.Write(T, 1, Index, Gfx.Pad(" " .. Text, W), Th.AccentFg, Th.Accent)
 			else
-				Gfx.Write(T, 1, Index, Gfx.Pad(" " .. Text, W), Disabled and Th.MenuDim or Th.MenuFg, Th.MenuBg)
+				Pane:Write(T, 1, Index, Gfx.Pad(" " .. Text, W), Disabled and "dim" or nil)
 			end
 		end
 	end

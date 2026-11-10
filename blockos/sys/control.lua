@@ -6,6 +6,7 @@ local Gfx = BlockOS.Require("gfx")
 local Config = BlockOS.Require("config")
 local Media = BlockOS.Require("media")
 local Wifi = BlockOS.Require("wifi")
+local Glass = BlockOS.Require("glass")
 
 local MaxW = 26
 
@@ -60,12 +61,13 @@ return function(Host)
 	end
 
 	-- Draws the whole panel into B (panel-local coordinates) and returns its height.
-	local function Paint(B, Th, W, MaxH)
+	-- Pane is the panel's background: glass over the desktop, or the solid menu colour.
+	local function Paint(B, Th, W, MaxH, Pane)
 		local Settings = Config.Settings()
 		local X0, CW = 2, W - 2
 		Control.Regions = {}
 		Control.List = nil
-		Gfx.Fill(B, 1, 1, W, MaxH, Th.MenuBg)
+		Pane:Fill(B)
 
 		local TileW = math.floor((CW - 1) / 2)
 		local RightX, RightW = X0 + TileW + 1, CW - TileW - 1
@@ -90,8 +92,8 @@ return function(Host)
 		-- Volume slider: click or drag along it, or scroll over it.
 		local Volume = math.floor(Media.Volume() * 100 + .5)
 		local Percent = (Volume == 0) and "Muted" or (Volume .. "%")
-		Gfx.Write(B, X0, 8, "Sound", Th.SubText, Th.MenuBg)
-		Gfx.Write(B, X0 + CW - #Percent, 8, Percent, Th.SubText, Th.MenuBg)
+		Pane:Write(B, X0, 8, "Sound", "dim", Th.SubText)
+		Pane:Write(B, X0 + CW - #Percent, 8, Percent, "dim", Th.SubText)
 		local Filled = math.floor(Volume / 100 * CW + .5)
 		Gfx.Fill(B, X0, 9, CW, 1, Th.Dark and colors.black or colors.lightGray)
 		Gfx.Fill(B, X0, 9, Filled, 1, Th.Accent)
@@ -100,10 +102,10 @@ return function(Host)
 
 		local Info = NowPlaying()
 		if (Info) then
-			Gfx.Write(B, X0, Row, "Now Playing", Th.SubText, Th.MenuBg)
+			Pane:Write(B, X0, Row, "Now Playing", "dim", Th.SubText)
 			local Title = tostring(Info.Title or "Untitled")
 			if (Info.Artist) then Title = Title .. " - " .. tostring(Info.Artist) end
-			Gfx.Write(B, X0, Row + 1, Gfx.Truncate(Title, CW), Th.MenuFg, Th.MenuBg)
+			Pane:Write(B, X0, Row + 1, Gfx.Truncate(Title, CW))
 			local Controls = {
 				{ "\171", "previous" },
 				{ (Info.State == "playing") and "\149\149" or "\16", "toggle" },
@@ -119,21 +121,21 @@ return function(Host)
 				Time = Time .. "/" .. FormatTime(Info.Total)
 			end
 			if (#Time <= CW - 12) then
-				Gfx.Write(B, X0 + CW - #Time, Row + 2, Time, Th.SubText, Th.MenuBg)
+				Pane:Write(B, X0 + CW - #Time, Row + 2, Time, "dim", Th.SubText)
 			end
 			Row = Row + 4
 		end
 
 		-- Recent notifications, newest first, two rows each.
 		local History = Host.History()
-		Gfx.Write(B, X0, Row, "Notifications", Th.SubText, Th.MenuBg)
+		Pane:Write(B, X0, Row, "Notifications", "dim", Th.SubText)
 		if (#History > 0) then
-			Gfx.Write(B, X0 + CW - 5, Row, "Clear", Th.Accent, Th.MenuBg)
+			Pane:Write(B, X0 + CW - 5, Row, "Clear", Th.Accent)
 			Region(X0 + CW - 5, Row, 5, 1, { Clear = true })
 		end
 		Row = Row + 1
 		if (#History == 0) then
-			Gfx.Write(B, X0, Row, "No notifications", Th.MenuDim, Th.MenuBg)
+			Pane:Write(B, X0, Row, "No notifications", "dim")
 			return Row + 1
 		end
 		local Visible = math.max(1, math.floor((MaxH - Row) / 2))
@@ -141,9 +143,9 @@ return function(Host)
 		Control.List = { Y = Row, Visible = Visible }
 		for Index = Control.Offset + 1, math.min(#History, Control.Offset + Visible) do
 			local Entry = History[Index]
-			Gfx.Write(B, X0, Row, Gfx.Truncate(Entry.Title, CW - 2), Th.Accent, Th.MenuBg)
-			Gfx.Write(B, X0 + CW - 1, Row, "x", Th.MenuDim, Th.MenuBg)
-			Gfx.Write(B, X0, Row + 1, Gfx.Truncate(Entry.Text, CW), Th.MenuFg, Th.MenuBg)
+			Pane:Write(B, X0, Row, Gfx.Truncate(Entry.Title, CW - 2), Th.Accent)
+			Pane:Write(B, X0 + CW - 1, Row, "x", "dim")
+			Pane:Write(B, X0, Row + 1, Gfx.Truncate(Entry.Text, CW))
 			Region(X0 + CW - 2, Row, 3, 1, { Dismiss = Entry })
 			Region(X0, Row, CW, 2, { Entry = Entry })
 			Row = Row + 2
@@ -176,7 +178,9 @@ return function(Host)
 		else
 			Control.Buffer.reposition(1, 1, W, MaxH)
 		end
-		local H = math.min(MaxH, Paint(Control.Buffer, Th, W, MaxH))
+		local Pane = Glass.Surface(Screen, ScreenW - W, 2, W, MaxH, "control", Th.MenuBg, Th.MenuFg, Th.MenuDim)
+		Pane.OX, Pane.OY = 1, 1
+		local H = math.min(MaxH, Paint(Control.Buffer, Th, W, MaxH, Pane))
 		Control.X, Control.Y, Control.W, Control.H = ScreenW - W, 2, W, H
 		local Shown = math.min(H, Control.Reveal or H)
 		for Row = 1, Shown do

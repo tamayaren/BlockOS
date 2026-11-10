@@ -6,6 +6,7 @@ local Wallpaper = {}
 
 Wallpaper.List = {
 	{ ID = "overworld", Name = "Overworld" },
+	{ ID = "mountain", Name = "Mountain" },
 	{ ID = "night", Name = "Starry Night" },
 	{ ID = "nether", Name = "Nether" },
 	{ ID = "ocean", Name = "Ocean" },
@@ -111,6 +112,85 @@ function Renderers.overworld(W, H)
 		end
 	end
 	Terrain(Canvas, Rand, H * .62, 2.2, colors.lime, colors.brown, colors.gray, colors.green)
+	return Finish(Canvas)
+end
+
+-- One ASCII peak: "/" and "\" slopes, a lit left face, a shaded right face and a snow cap.
+-- Rock and Snow are { lit, shaded } colour pairs.
+local function Peak(Canvas, Rand, ApexX, ApexY, BaseY, Rock, Snow)
+	local SnowRows = math.max(2, math.floor((BaseY - ApexY) * .38))
+	for Y = ApexY, BaseY do
+		local Depth = Y - ApexY
+		-- The ridge wanders a little on its way down from the summit.
+		local Ridge = ApexX + math.floor(math.sin(Depth * .8) * math.min(Depth, 3) * .5 + .5)
+		for X = ApexX - Depth, ApexX + Depth + 1 do
+			local Lit = X <= Ridge
+			-- The snow line is ragged, and reaches lower on the lit side.
+			local Snowy = Depth < SnowRows + (Lit and 1 or 0) - ((X + Depth) % 3 == 0 and 1 or 0)
+			local Pair = Snowy and Snow or Rock
+			local Color = Lit and Pair[1] or Pair[2]
+			if (X == ApexX - Depth) then
+				Set(Canvas, X, Y, "/", Color)
+			elseif (X == ApexX + Depth + 1) then
+				Set(Canvas, X, Y, "\\", Color)
+			else
+				local Char = " "
+				if (X == Ridge and Depth > 0) then
+					Char = (Depth % 2 == 0) and "\\" or "/"
+				elseif (Rand(7) == 0) then
+					Char = Lit and "." or "'"
+				end
+				Set(Canvas, X, Y, Char, Lit and Pair[2] or colors.black, Color)
+			end
+		end
+	end
+end
+
+function Renderers.mountain(W, H)
+	local Canvas = NewCanvas(W, H, colors.lightBlue)
+	local Rand = Random(2000)
+	local BaseY = math.floor(H * .72)
+	-- Deep blue overhead, and a pink dawn glow low between the peaks.
+	for Y = 1, BaseY do
+		local Band = (Y <= H * .12) and colors.blue or ((Y >= BaseY - 2) and colors.pink or colors.lightBlue)
+		for X = 1, W do
+			Set(Canvas, X, Y, " ", nil, Band)
+		end
+	end
+	-- A hazy range first, then the main peaks in front of it: { X, summit height } as fractions.
+	local Haze = { { colors.cyan, colors.blue }, { colors.white, colors.lightGray } }
+	local Stone = { { colors.lightGray, colors.gray }, { colors.white, colors.lightGray } }
+	for _, Spot in ipairs({ { .1, .44 }, { .5, .34 }, { .88, .42 } }) do
+		Peak(Canvas, Rand, math.floor(W * Spot[1]), math.floor(H * Spot[2]), BaseY, Haze[1], Haze[2])
+	end
+	for _, Spot in ipairs({ { .72, .26 }, { 0, .5 }, { 1, .46 }, { .3, .16 } }) do
+		Peak(Canvas, Rand, math.floor(W * Spot[1]), math.max(2, math.floor(H * Spot[2])), BaseY, Stone[1], Stone[2])
+	end
+	-- Clouds drift in front of the summits.
+	for _ = 1, math.max(2, math.floor(W / 18)) do
+		local CloudX, CloudY = Rand(W) + 1, Rand(math.max(1, math.floor(H * .2))) + math.floor(H * .12) + 2
+		local Length = Rand(5) + 5
+		for X = CloudX, CloudX + Length do
+			Set(Canvas, X, CloudY, (X == CloudX) and "(" or ((X == CloudX + Length) and ")" or "_"), colors.lightGray, colors.white)
+		end
+		for X = CloudX + 2, CloudX + Length - 2 do
+			Set(Canvas, X, CloudY - 1, " ", nil, colors.white)
+		end
+	end
+	-- Pines along the foot of the mountains, then a meadow with a small lake.
+	local LakeX, LakeY = W * .68, BaseY + (H - BaseY) * .5 + 1
+	for X = 1, W do
+		local TreeTop = BaseY + math.floor(math.sin(X / 6) + .5)
+		for Y = TreeTop, H do
+			if (Y <= TreeTop + 1) then
+				Set(Canvas, X, Y, (Rand(3) ~= 0) and "\30" or " ", colors.lime, colors.green)
+			elseif (((X - LakeX) / (W * .16)) ^ 2 + ((Y - LakeY) / 1.4) ^ 2 < 1) then
+				Set(Canvas, X, Y, (Rand(3) == 0) and "~" or " ", colors.white, colors.lightBlue)
+			else
+				Set(Canvas, X, Y, (Rand(5) == 0) and "\"" or " ", colors.green, colors.lime)
+			end
+		end
+	end
 	return Finish(Canvas)
 end
 

@@ -1,4 +1,4 @@
--- Login / lock screen drawn straight over a slow ASCII plasma, without a panel.
+-- Login / lock screen drawn straight over the animated screensaver, without a panel.
 -- Used by the desktop for logging in and locking.
 
 local Gfx = BlockOS.Require("gfx")
@@ -36,20 +36,27 @@ function Login:Start()
 	self:Draw()
 end
 
--- Writes text onto the canvas, keeping the plasma's background colour unless Bg is given.
+-- Writes text onto the canvas, keeping the backdrop's colour unless Bg is given.
+-- Without Fg the text is white, or on a bright backdrop whichever of black and white stands out.
 local function Put(Canvas, X, Y, Text, Fg, Bg)
 	if (Y < 1 or Y > Canvas.H) then return end
 	for Index = 1, #Text do
 		local Column = X + Index - 1
 		if (Column >= 1 and Column <= Canvas.W) then
 			Canvas.Chars[Y][Column] = Text:sub(Index, Index)
-			Canvas.Fg[Y][Column] = Hex[Fg]
 			if (Bg) then Canvas.Bg[Y][Column] = Hex[Bg] end
+			if (Fg) then
+				Canvas.Fg[Y][Column] = Hex[Fg]
+			elseif (Canvas.AutoInk) then
+				Canvas.Fg[Y][Column] = Gfx.ContrastBlit(Canvas.Bg[Y][Column])
+			else
+				Canvas.Fg[Y][Column] = Hex[colors.white]
+			end
 		end
 	end
 end
 
--- Clears the plasma characters behind a block of text so it stays readable.
+-- Clears the backdrop's characters behind a block of text so it stays readable.
 local function Clear(Canvas, X, Y, W)
 	Put(Canvas, X, Y, string.rep(" ", W), colors.white)
 end
@@ -91,19 +98,28 @@ function Login:Draw()
 
 	local Time, Suffix = ClockText()
 	local Y = 2
-	PutCentered(Canvas, Y, os.date("%A, %B %d"), colors.white)
+	PutCentered(Canvas, Y, os.date("%A, %B %d"))
 	if (H >= 17 and W >= 24) then
 		local BigW = Gfx.BigWidth(Time)
 		local BigX = math.floor((W - BigW) / 2) + 1
+		-- The digits are one colour throughout: black if most of the sky behind them is bright.
+		local Cells, Bright = {}, 0
 		Gfx.EachBigCell(BigX, Y + 2, Time, function(X, CellY)
-			Put(Canvas, X, CellY, " ", colors.white, colors.white)
+			if (X >= 1 and X <= W and CellY <= H) then
+				Cells[#Cells + 1] = { X, CellY }
+				if (Gfx.ContrastBlit(Canvas.Bg[CellY][X]) == Hex[colors.black]) then Bright = Bright + 1 end
+			end
 		end)
+		local Ink = (Canvas.AutoInk and Bright * 2 > #Cells) and colors.black or colors.white
+		for _, Cell in ipairs(Cells) do
+			Put(Canvas, Cell[1], Cell[2], " ", Ink, Ink)
+		end
 		if (Suffix) then
-			Put(Canvas, BigX + BigW + 1, Y + 6, Suffix, colors.white)
+			Put(Canvas, BigX + BigW + 1, Y + 6, Suffix)
 		end
 		Y = Y + 8
 	else
-		PutCentered(Canvas, Y + 1, Time .. (Suffix and (" " .. Suffix) or ""), colors.white)
+		PutCentered(Canvas, Y + 1, Time .. (Suffix and (" " .. Suffix) or ""))
 		Y = Y + 3
 	end
 
@@ -120,7 +136,7 @@ function Login:Draw()
 	end
 
 	local Name = self.User and self.User.Name or "Guest"
-	PutCentered(Canvas, Y, Name, colors.white)
+	PutCentered(Canvas, Y, Name)
 	Y = Y + 2
 
 	self.Buttons = {}
@@ -146,7 +162,7 @@ function Login:Draw()
 	-- Power button: a small circle in the bottom-right corner that opens a menu.
 	local PowerX, PowerY = W - 2, H - 1
 	Clear(Canvas, PowerX - 1, PowerY, 3)
-	Put(Canvas, PowerX, PowerY, "\7", self.PowerOpen and colors.lightGray or colors.white)
+	Put(Canvas, PowerX, PowerY, "\7", self.PowerOpen and colors.lightGray or nil)
 	table.insert(self.Buttons, { X = PowerX - 1, Y = PowerY, W = 3, Action = "power" })
 	if (self.PowerOpen) then
 		local MenuW = 11

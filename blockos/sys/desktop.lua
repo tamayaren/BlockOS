@@ -8,6 +8,7 @@ local Config = BlockOS.Require("config")
 local Apps = BlockOS.Require("apps")
 local Wallpaper = BlockOS.Require("wallpaper")
 local Users = BlockOS.Require("users")
+local Glass = BlockOS.Require("glass")
 local Login = BlockOS.Load("/blockos/sys/login.lua")
 
 local Desktop = {}
@@ -695,13 +696,20 @@ function Draw.Frame(Proc, Th, Active, Row)
 	end
 	local Bg = Active and Th.TitleBg or Th.TitleIdleBg
 	local Fg = Active and Th.TitleFg or Th.TitleIdleFg
-	Gfx.Fill(Screen, X, Y, W, 1, Bg)
+	-- Windows wear glass title bars; a full-screen window has nothing behind it, so its bar is solid.
+	local Pane
+	if (Proc.Fullscreen) then
+		Pane = Glass.Solid(X, Y, W, 1, Bg, Fg, Th.TitleIdleFg)
+	else
+		Pane = Glass.Surface(Screen, X, Y, W, 1, "frame" .. Proc.ID, Bg, Fg, Th.TitleIdleFg)
+	end
+	Pane:Fill(Screen)
 	local Title = Gfx.Truncate(Proc.Title, W - 9)
-	local TitleX = math.max(X + 8, X + math.floor((W - #Title) / 2))
-	Gfx.Write(Screen, TitleX, Y, Title, Fg, Bg)
-	local Lights = Active and { Th.Close, Th.Minimize, Th.Zoom } or { Th.TitleIdleFg, Th.TitleIdleFg, Th.TitleIdleFg }
+	local TitleX = math.max(8, math.floor((W - #Title) / 2)) + 1
+	Pane:Write(Screen, TitleX, 1, Title, (not Active) and "dim" or nil)
+	local Lights = Active and { Th.Close, Th.Minimize, Th.Zoom } or { "dim", "dim", "dim" }
 	for Index, Color in ipairs(Lights) do
-		Gfx.Write(Screen, X + Index * 2 - 1, Y, "\7", Color, Bg)
+		Pane:Write(Screen, Index * 2, 1, "\7", Color)
 	end
 end
 
@@ -737,45 +745,21 @@ local function AppName()
 	return "BlockOS"
 end
 
--- Smears the top of the wallpaper into blocks of its most common background colour.
-function Topbar.Blur(Rows)
-	if (Topbar.BlurSource == Rows) then return Topbar.BlurRow end
-	local Radius = 3
-	local Depth = math.min(3, #Rows)
-	local Out = {}
-	for X = 1, ScreenW do
-		local Counts, Best, BestCount = {}, Rows[1][3]:sub(X, X), 0
-		for Y = 1, Depth do
-			local Line = Rows[Y][3]
-			for Column = math.max(1, X - Radius), math.min(#Line, X + Radius) do
-				local Color = Line:sub(Column, Column)
-				local Count = (Counts[Color] or 0) + 1
-				Counts[Color] = Count
-				if (Count > BestCount) then
-					Best, BestCount = Color, Count
-				end
-			end
-		end
-		Out[X] = Best
-	end
-	Topbar.BlurSource, Topbar.BlurRow = Rows, table.concat(Out)
-	return Topbar.BlurRow
-end
-
--- The menu bar row before any text: solid theme colour, the wallpaper itself, or a blurred copy of it.
+-- The menu bar row before any text: solid theme colour, the wallpaper itself, or glass over what is behind it.
 function Topbar.Background(Th, Style)
 	if (Style == "clear") then
 		local Row = WallpaperRows()[1]
 		return Row[1], Row[2], Row[3]
-	elseif (Style == "blur") then
-		return string.rep(" ", ScreenW), string.rep(Gfx.ToBlit(Th.TopbarFg), ScreenW), Topbar.Blur(WallpaperRows())
 	end
-	return string.rep(" ", ScreenW), string.rep(Gfx.ToBlit(Th.TopbarFg), ScreenW), string.rep(Gfx.ToBlit(Th.TopbarBg), ScreenW)
+	local Pane = (Style == "blur") and Glass.Pane(Screen, 1, 1, ScreenW, 1, "topbar") or nil
+	local Bgs = Pane and Pane.Rows[1] or string.rep(Gfx.ToBlit(Th.TopbarBg), ScreenW)
+	return string.rep(" ", ScreenW), string.rep(Gfx.ToBlit(Th.TopbarFg), ScreenW), Bgs
 end
 
 function Draw.Topbar(Th)
 	Topbar.Regions = {}
-	local Style = Config.Settings().TopbarStyle or "solid"
+	local Style = Glass.Enabled() and "blur" or "solid"
+	if (Config.Settings().TopbarStyle == "clear") then Style = "clear" end
 	-- The wallpaper is hidden behind a full-screen app, so its revealed menu bar stays solid.
 	if (FocusedFullscreen()) then Style = "solid" end
 	local Chars, Fgs, Bgs = Topbar.Background(Th, Style)
@@ -892,8 +876,10 @@ function Draw.Dock(Th)
 	local W = #Items * 4 + 1
 	local X0 = math.floor((ScreenW - W) / 2) + 1
 	local Top = DockTop()
+	local Pane
 	if (not Clear) then
-		Gfx.Fill(Screen, X0, Top, W, Height, Th.DockBg)
+		Pane = Glass.Surface(Screen, X0, Top, W, Height, "dock", Th.DockBg, Th.DockFg)
+		Pane:Fill(Screen)
 	end
 	DockRegions = {}
 	local Unread = UnreadMessages()
@@ -909,11 +895,10 @@ function Draw.Dock(Th)
 		end
 		local IsRunning, IsFocused = ItemRunning(Item)
 		if (IsRunning) then
-			local Color = IsFocused and Th.Accent or Th.DockFg
-			if (Clear) then
-				WriteOver(X + 1, Top + IconRows, "\7", IsFocused and Th.Accent or colors.white)
+			if (Pane) then
+				Pane:Write(Screen, X - X0 + 2, IconRows + 1, "\7", IsFocused and Th.Accent or nil)
 			else
-				Gfx.Write(Screen, X + 1, Top + IconRows, "\7", Color, Th.DockBg)
+				WriteOver(X + 1, Top + IconRows, "\7", IsFocused and Th.Accent or colors.white)
 			end
 		end
 		Item.X = X
@@ -1034,12 +1019,11 @@ end
 
 function Draw.Launchpad(Th)
 	Launchpad.Regions = {}
-	if (Launchpad.Rect) then
-		local Rect = Launchpad.Rect
-		Gfx.Fill(Screen, Rect[1], Rect[2], Rect[3], Rect[4], colors.gray, colors.lightGray, "\127")
-		return
-	end
-	Gfx.Fill(Screen, 1, 1, ScreenW, ScreenH, colors.gray, colors.lightGray, "\127")
+	-- Streaks over a blur of the desktop; the solid material is the old flat gray.
+	local Rect = Launchpad.Rect or { 1, 1, ScreenW, ScreenH }
+	local Pane = Glass.Surface(Screen, Rect[1], Rect[2], Rect[3], Rect[4], "launchpad", colors.gray, colors.white, colors.lightGray)
+	Pane:Fill(Screen, "\127", "streak")
+	if (Launchpad.Rect) then return end
 	local SearchW = math.min(24, ScreenW - 4)
 	local SearchX = math.floor((ScreenW - SearchW) / 2) + 1
 	local Query = Launchpad.Query
@@ -1067,11 +1051,12 @@ function Draw.Launchpad(Th)
 			Screen.setCursorPos(X + 3, Y + Line - 1)
 			Screen.blit(Gfx.Pad(App.Icon.Lines[Line] or "", 3), string.rep(Gfx.ToBlit(App.Icon.Fg), 3), string.rep(Gfx.ToBlit(App.Icon.Bg), 3))
 		end
-		Gfx.Write(Screen, X, Y + 2, Gfx.Pad(App.Name, CellW - 1, "center"), colors.white, colors.gray)
+		Pane:Write(Screen, X, Y + 2, Gfx.Pad(App.Name, CellW - 1, "center"))
 		table.insert(Launchpad.Regions, { X = X, Y = Y, W = CellW - 1, H = 3, App = App })
 	end
 	if (#List == 0) then
-		Gfx.Center(Screen, 6, "No apps found", colors.white, colors.gray)
+		local Empty = " No apps found "
+		Pane:Write(Screen, math.max(1, math.floor((ScreenW - #Empty) / 2) + 1), 6, Empty)
 	end
 	if (Pages > 1) then
 		local Dots = ""
@@ -1080,7 +1065,7 @@ function Draw.Launchpad(Th)
 		end
 		local DotX = math.floor((ScreenW - #Dots) / 2) + 1
 		for Page = 1, Pages do
-			Gfx.Write(Screen, DotX + (Page - 1) * 2, ScreenH, "\7", (Page == Launchpad.Page) and colors.white or colors.lightGray, colors.gray)
+			Pane:Write(Screen, DotX + (Page - 1) * 2, ScreenH, "\7", (Page ~= Launchpad.Page) and "dim" or nil)
 		end
 	end
 end
@@ -1096,12 +1081,13 @@ function Draw.Toasts(Th)
 		local X = ScreenW - W + (Toast.Slide or 0)
 		local Lines = Gfx.Wrap(Toast.Text or "", W - 2)
 		local H = math.min(#Lines, 2) + 2
-		Gfx.Fill(Screen, X, Y, W, H, Th.MenuBg)
-		Gfx.Write(Screen, X + 1, Y, Gfx.Truncate(Toast.Title, W - 2), Th.Accent, Th.MenuBg)
+		local Pane = Glass.Surface(Screen, X, Y, W, H, "toast" .. Y, Th.MenuBg, Th.MenuFg, Th.MenuDim)
+		Pane:Fill(Screen)
+		Pane:Write(Screen, 2, 1, Gfx.Truncate(Toast.Title, W - 2), Th.Accent)
 		for Row = 1, H - 2 do
-			Gfx.Write(Screen, X + 1, Y + Row, Gfx.Truncate(Lines[Row], W - 2), Th.MenuFg, Th.MenuBg)
+			Pane:Write(Screen, 2, Row + 1, Gfx.Truncate(Lines[Row], W - 2))
 		end
-		Gfx.Write(Screen, X + W - 2, Y, "x", Th.MenuDim, Th.MenuBg)
+		Pane:Write(Screen, W - 1, 1, "x", "dim")
 		Toast.X, Toast.Y, Toast.W, Toast.H = X, Y, W, H
 		Y = Y + H + 1
 		if (Y > ScreenH - 3) then break end
@@ -1115,20 +1101,21 @@ function Draw.Menu(Th)
 	-- Dock menus sit above the dock, so they unroll upwards.
 	local First = Current.Up and (Height - Shown + 1) or 1
 	local Last = Current.Up and Height or Shown
-	Gfx.Fill(Screen, Current.X, Current.Y + First - 1, Current.W, Last - First + 1, Th.MenuBg)
+	local Pane = Glass.Surface(Screen, Current.X, Current.Y, Current.W, Height, "menu", Th.MenuBg, Th.MenuFg, Th.MenuDim)
+	Pane:Fill(Screen, " ", nil, First, Last)
 	for Index = First, Last do
 		local Item = Current.Items[Index]
-		local Y = Current.Y + Index - 1
 		if (Item == "-") then
-			Gfx.Write(Screen, Current.X, Y, string.rep("\140", Current.W), Th.MenuDim, Th.MenuBg)
+			Pane:Write(Screen, 1, Index, string.rep("\140", Current.W), "dim")
 		else
-			local Bg, Fg = Th.MenuBg, Item.Disabled and Th.MenuDim or Th.MenuFg
-			if (Index == Current.Hover and not Item.Disabled) then
-				Bg, Fg = Th.Accent, Th.AccentFg
-			end
 			local Prefix = Item.Checked and "\4" or " "
 			local Hint = Item.Hint or ""
-			Gfx.Write(Screen, Current.X, Y, Gfx.Pad(Prefix .. Item.Text, Current.W - #Hint - 1) .. Hint .. " ", Fg, Bg)
+			local Text = Gfx.Pad(Prefix .. Item.Text, Current.W - #Hint - 1) .. Hint .. " "
+			if (Index == Current.Hover and not Item.Disabled) then
+				Gfx.Write(Screen, Current.X, Current.Y + Index - 1, Text, Th.AccentFg, Th.Accent)
+			else
+				Pane:Write(Screen, 1, Index, Text, Item.Disabled and "dim" or nil)
+			end
 		end
 	end
 	if (not Current.Reveal) then

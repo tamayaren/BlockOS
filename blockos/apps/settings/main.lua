@@ -147,7 +147,9 @@ function Builders.appearance(X, Y, W, H)
 		Settings.Accent = Color
 		Save()
 	end)
-	ChoiceRow(Y + 2, "Menu bar", "TopbarStyle", { "Solid", "Clear", "Blur" }, { "solid", "clear", "blur" }, "solid")
+	-- Blur turns the menu bar, dock, menus, title bars, Launchpad and Control Center into glass.
+	ChoiceRow(Y + 2, "Material", "Material", { "Blur", "Solid" }, { "blur", "solid" }, "blur")
+	ChoiceRow(Y + 3, "Menu bar", "TopbarStyle", { "Standard", "Clear" }, { "auto", "clear" }, "auto")
 	Page:Add(Ui.Label.new({ X = X, Y = Y + 4, Text = "Wallpaper" }))
 	local Items = {}
 	local Selected = 1
@@ -357,7 +359,7 @@ end
 
 function Builders.dock(X, Y, W, H)
 	ChoiceRow(Y, "Size", "DockSize", { "Small", "Large" }, { "small", "large" }, "small")
-	ChoiceRow(Y + 1, "Style", "DockStyle", { "Solid", "Clear" }, { "solid", "transparent" }, "solid")
+	ChoiceRow(Y + 1, "Style", "DockStyle", { "Standard", "Clear" }, { "auto", "transparent" }, "auto")
 	ToggleRow(Y + 3, "Animations", "Animations")
 	local List = Page:Add(Ui.List.new({ X = X, Y = Y + 5, W = W, H = math.max(1, H - 8), Bg = "Panel" }))
 	local function Fill()
@@ -411,33 +413,43 @@ function Builders.dock(X, Y, W, H)
 end
 
 function Builders.lockscreen(X, Y, W, H)
-	Page:Add(Ui.Label.new({ X = X, Y = Y, W = W, Text = "Screensaver colours", Fg = "SubText" }))
-	local Items = {}
-	local Selected = 1
-	for Index, Entry in ipairs(Screensaver.Palettes) do
-		table.insert(Items, { Text = Entry.Name, ID = Entry.ID })
-		if (Entry.ID == (Settings.LockColors or "accent")) then Selected = Index end
+	local Styles, Values = {}, {}
+	for Index, Entry in ipairs(Screensaver.Styles) do
+		Styles[Index], Values[Index] = Entry.Name, Entry.ID
 	end
-	local ListW = math.min(15, W - 2)
-	local ListH = math.max(2, math.min(#Items, H - 4))
-	local List = Page:Add(Ui.List.new({ X = X, Y = Y + 1, W = ListW, H = ListH, Items = Items, Bg = "Panel" }))
-	List:Select(Selected)
-	List.OnSelect = function(_, _, Item)
-		Settings.LockColors = Item.ID
-		Save()
+	ChoiceRow(Y, "Background", "LockStyle", Styles, Values, Values[1])
+	local Plasma = Screensaver.Style(Settings.LockStyle).ID == "plasma"
+	local Hint = Plasma and "Plasma colours" or "Follows the time of day"
+	Page:Add(Ui.Label.new({ X = X, Y = Y + 2, W = W, Text = Hint, Fg = "SubText" }))
+	local ListW = Plasma and math.min(15, W - 2) or -1
+	local ListH = math.max(2, math.min(#Screensaver.Palettes, H - 6))
+	if (Plasma) then
+		local Items = {}
+		local Selected = 1
+		for Index, Entry in ipairs(Screensaver.Palettes) do
+			table.insert(Items, { Text = Entry.Name, ID = Entry.ID })
+			if (Entry.ID == (Settings.LockColors or "accent")) then Selected = Index end
+		end
+		local List = Page:Add(Ui.List.new({ X = X, Y = Y + 3, W = ListW, H = ListH, Items = Items, Bg = "Panel" }))
+		List:Select(Selected)
+		List.OnSelect = function(_, _, Item)
+			Settings.LockColors = Item.ID
+			Save()
+		end
 	end
 	local PreviewW = W - ListW - 1
 	if (PreviewW >= 6) then
 		local Canvas = Screensaver.NewCanvas(PreviewW, ListH)
 		Page:Add(Ui.Canvas.new({
-			X = X + ListW + 1, Y = Y + 1, W = PreviewW, H = ListH,
+			X = X + ListW + 1, Y = Y + 3, W = PreviewW, H = ListH,
 			OnDraw = function(Self, T)
-				Screensaver.Render(Canvas, PreviewFrame * Screensaver.Speed * 4, Settings.LockColors)
+				-- The Horizon preview runs through a whole day every half minute.
+				Screensaver.Render(Canvas, PreviewFrame * Screensaver.Speed * 4, Settings.LockColors, Settings.LockStyle, (PreviewFrame * .08) % 24)
 				Screensaver.Blit(T, Canvas, Self.X, Self.Y)
 			end
 		}))
 	end
-	Page:Add(Ui.Button.new({ X = X, Y = Y + ListH + 2, Text = " Lock Now ", Style = "primary", OnClick = function() BlockOS.Lock() end }))
+	Page:Add(Ui.Button.new({ X = X, Y = Y + ListH + 4, Text = " Lock Now ", Style = "primary", OnClick = function() BlockOS.Lock() end }))
 end
 
 function Builders.users(X, Y, W)
