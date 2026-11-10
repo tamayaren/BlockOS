@@ -28,6 +28,7 @@ local Doc = {
 	Y = 1,
 	ScrollX = 0,
 	ScrollY = 0,
+	ScrollRow = 0,
 	Path = nil,
 	Modified = false,
 	Anchor = nil,
@@ -43,6 +44,7 @@ local Modifiers = Ui.Modifiers
 local Find = ""
 local Page = Ui.Page.new()
 local Editor
+local Prefs = Config.Load("editor")
 
 local function Palette(Th)
 	if (Th.Dark) then
@@ -308,12 +310,105 @@ local function InsertText(Text)
 end
 
 local function ViewSize()
+	-- The gutter grows with the line count, so keep it current between draws.
+	Editor.Gutter = #tostring(#Doc.Lines) + 2
 	return Editor.W - Editor.Gutter, Editor.H
+end
+
+--
+-- Word wrap: the view starts Doc.ScrollRow visual rows into line Doc.ScrollY + 1.
+--
+
+local function Expand(Line)
+	return (Line:gsub("\t", string.rep(" ", TabWidth())))
+end
+
+-- Display columns where each visual row of a line starts, breaking after the last space that fits.
+local function WrapStarts(Display, Width)
+	local Starts = { 0 }
+	local Position = 0
+	while (#Display - Position >= Width) do
+		local Break = Display:sub(Position + 1, Position + Width):match("^.*%S *() ")
+		Position = Position + (Break or Width)
+		table.insert(Starts, Position)
+	end
+	return Starts
+end
+
+local function WrapWidth()
+	local ViewW = ViewSize()
+	return math.max(2, ViewW)
+end
+
+local function LineStarts(Index)
+	return WrapStarts(Expand(Doc.Lines[Index]), WrapWidth())
+end
+
+-- The visual row (from 0) of the cursor within its line, and its column within that row.
+local function CursorRow()
+	local Starts = LineStarts(Doc.Y)
+	local Column = DisplayWidth(Doc.Lines[Doc.Y], Doc.X - 1)
+	local Row = 0
+	for Index = 2, #Starts do
+		if (Starts[Index] <= Column) then Row = Index - 1 end
+	end
+	return Row, Column - Starts[Row + 1]
+end
+
+-- Moves a (line, row) position by Delta visual rows, stopping at the ends of the document.
+local function StepRows(LineIndex, Row, Delta)
+	while (Delta < 0) do
+		if (Row > 0) then
+			Row = Row - 1
+		elseif (LineIndex > 1) then
+			LineIndex = LineIndex - 1
+			Row = #LineStarts(LineIndex) - 1
+		else
+			break
+		end
+		Delta = Delta + 1
+	end
+	while (Delta > 0) do
+		if (Row < #LineStarts(LineIndex) - 1) then
+			Row = Row + 1
+		elseif (LineIndex < #Doc.Lines) then
+			LineIndex, Row = LineIndex + 1, 0
+		else
+			break
+		end
+		Delta = Delta - 1
+	end
+	return LineIndex, Row
+end
+
+-- Visual rows from the top of the view down to the cursor: -1 when it is above, at most Limit.
+local function CursorOffset(Limit)
+	local Row = CursorRow()
+	if (Doc.Y - 1 < Doc.ScrollY or (Doc.Y - 1 == Doc.ScrollY and Row < Doc.ScrollRow)) then return -1 end
+	local Rows = Row - Doc.ScrollRow
+	for Index = Doc.ScrollY + 1, Doc.Y - 1 do
+		Rows = Rows + #LineStarts(Index)
+		if (Rows >= Limit) then return Limit end
+	end
+	return Rows
 end
 
 local function EnsureVisible()
 	Clamp()
 	local ViewW, ViewH = ViewSize()
+	if (Prefs.WordWrap) then
+		Doc.ScrollX = 0
+		Doc.ScrollY = math.max(0, math.min(Doc.ScrollY, #Doc.Lines - 1))
+		Doc.ScrollRow = math.min(Doc.ScrollRow, #LineStarts(Doc.ScrollY + 1) - 1)
+		local Offset = CursorOffset(ViewH)
+		if (Offset < 0) then
+			Doc.ScrollY, Doc.ScrollRow = Doc.Y - 1, (CursorRow())
+		elseif (Offset >= ViewH) then
+			local Top, Row = StepRows(Doc.Y, (CursorRow()), 1 - ViewH)
+			Doc.ScrollY, Doc.ScrollRow = Top - 1, Row
+		end
+		return
+	end
 	if (Doc.Y <= Doc.ScrollY) then Doc.ScrollY = Doc.Y - 1 end
 	if (Doc.Y > Doc.ScrollY + ViewH) then Doc.ScrollY = Doc.Y - ViewH end
 	local Column = DisplayWidth(Doc.Lines[Doc.Y], Doc.X - 1)
@@ -337,7 +432,7 @@ local function SetLines(Text)
 			break
 		end
 	end
-	Doc.X, Doc.Y, Doc.ScrollX, Doc.ScrollY = 1, 1, 0, 0
+	Doc.X, Doc.Y, Doc.ScrollX, Doc.ScrollY, Doc.ScrollRow = 1, 1, 0, 0, 0
 	Doc.Anchor = nil
 	Doc.Undo, Doc.Redo = {}, {}
 	Doc.Modified = false
@@ -464,7 +559,16 @@ local function Move(Key)
 	elseif (Key == keys.up or Key == keys.down or Key == keys.pageUp or Key == keys.pageDown) then
 		local Column = DisplayWidth(Line, Doc.X - 1)
 		local Step = ({ [keys.up] = -1, [keys.down] = 1, [keys.pageUp] = -ViewH, [keys.pageDown] = ViewH })[Key]
-		Doc.Y = math.max(1, math.min(#Doc.Lines, Doc.Y + Step))
+		if (Prefs.WordWrap) then
+			local Row, Offset = CursorRow()
+			local TargetY, TargetRow = StepRows(Doc.Y, Row, Step)
+			local Starts = LineStarts(TargetY)
+			Column = Starts[TargetRow + 1] + Offset
+			if (Starts[TargetRow + 2]) then Column = math.min(Column, Starts[TargetRow + 2] - 1) end
+			Doc.Y = TargetY
+		else
+			Doc.Y = math.max(1, math.min(#Doc.Lines, Doc.Y + Step))
+		end
 		Doc.X = CharFromDisplay(Doc.Lines[Doc.Y], Column)
 	elseif (Key == keys.home) then
 		if (Modifiers.Ctrl) then
@@ -635,6 +739,19 @@ local function EditMenu()
 	EnsureVisible()
 end
 
+local function ToggleWrap()
+	Prefs.WordWrap = not Prefs.WordWrap
+	Config.Save("editor")
+	Doc.ScrollX, Doc.ScrollRow = 0, 0
+	EnsureVisible()
+	SetMessage(Prefs.WordWrap and "Word wrap on" or "Word wrap off")
+end
+
+local function ViewMenu()
+	local Choice = Ui.ContextMenu(13, 2, { { Text = (Prefs.WordWrap and "\7 " or "  ") .. "Word Wrap" } })
+	if (Choice == 1) then ToggleWrap() end
+end
+
 --
 -- Editor widget
 --
@@ -645,56 +762,82 @@ local function DrawEditor(Self, T, Th)
 	Self.Gutter = Digits + 2
 	local ViewW = Self.W - Self.Gutter
 	local AX, AY, BX, BY = SelectionRange()
+	local BgCode, SelCode = Hex[P.Bg], Hex[P.Selection]
+	local LineIndex, Part = Doc.ScrollY + 1, Prefs.WordWrap and Doc.ScrollRow or 0
+	local Built = nil
 	for Row = 1, Self.H do
-		local LineIndex = Doc.ScrollY + Row
 		local Y = Self.Y + Row - 1
 		local Line = Doc.Lines[LineIndex]
 		if (not Line) then
 			Gfx.Fill(T, Self.X, Y, Self.Gutter, 1, P.Gutter)
 			Gfx.Fill(T, Self.X + Self.Gutter, Y, ViewW, 1, P.Bg)
 		else
-			local Number = Gfx.Pad(tostring(LineIndex), Digits, "right") .. " "
-			Gfx.Write(T, Self.X, Y, " " .. Number, (LineIndex == Doc.Y) and P.Text or P.GutterFg, P.Gutter)
-			local Colors = Highlight(Line, StateAt(LineIndex, P), P)
-			local Chars, Fg, Bg = {}, {}, {}
-			local BgCode, SelCode = Hex[P.Bg], Hex[P.Selection]
-			for Index = 1, #Line do
-				local Char = Line:sub(Index, Index)
-				local Selected = AX and (LineIndex > AY or (LineIndex == AY and Index >= AX)) and (LineIndex < BY or (LineIndex == BY and Index < BX))
-				local Code = Colors:sub(Index, Index)
-				if (Code == "") then Code = Hex[P.Text] end
-				if (Char == "\t") then
-					for _ = 1, TabWidth() do
-						table.insert(Chars, " ")
+			if (not Built) then
+				local Colors = Highlight(Line, StateAt(LineIndex, P), P)
+				local Chars, Fg, Bg = {}, {}, {}
+				for Index = 1, #Line do
+					local Char = Line:sub(Index, Index)
+					local Selected = AX and (LineIndex > AY or (LineIndex == AY and Index >= AX)) and (LineIndex < BY or (LineIndex == BY and Index < BX))
+					local Code = Colors:sub(Index, Index)
+					if (Code == "") then Code = Hex[P.Text] end
+					for _ = 1, (Char == "\t") and TabWidth() or 1 do
+						table.insert(Chars, (Char == "\t") and " " or Char)
 						table.insert(Fg, Code)
 						table.insert(Bg, Selected and SelCode or BgCode)
 					end
-				else
-					table.insert(Chars, Char)
-					table.insert(Fg, Code)
-					table.insert(Bg, Selected and SelCode or BgCode)
+				end
+				Built = { Text = table.concat(Chars), Fg = table.concat(Fg), Bg = table.concat(Bg) }
+				if (Prefs.WordWrap) then
+					Built.Starts = WrapStarts(Built.Text, WrapWidth())
+					Part = math.min(Part, #Built.Starts - 1)
 				end
 			end
-			local Text = table.concat(Chars):sub(Doc.ScrollX + 1, Doc.ScrollX + ViewW)
-			local FgText = table.concat(Fg):sub(Doc.ScrollX + 1, Doc.ScrollX + ViewW)
-			local BgText = table.concat(Bg):sub(Doc.ScrollX + 1, Doc.ScrollX + ViewW)
+			-- The slice of the line on this row: one wrapped part, or the scrolled window.
+			local From, To = Doc.ScrollX, Doc.ScrollX + ViewW
+			if (Built.Starts) then
+				From = Built.Starts[Part + 1]
+				To = math.min(Built.Starts[Part + 2] or #Built.Text, From + ViewW)
+			end
+			local Number = (Part == 0) and Gfx.Pad(tostring(LineIndex), Digits, "right") or string.rep(" ", Digits)
+			Gfx.Write(T, Self.X, Y, " " .. Number .. " ", (LineIndex == Doc.Y) and P.Text or P.GutterFg, P.Gutter)
+			local Text = Built.Text:sub(From + 1, To)
 			local Padding = ViewW - #Text
 			T.setCursorPos(Self.X + Self.Gutter, Y)
-			T.blit(Text .. string.rep(" ", Padding), FgText .. string.rep(Hex[P.Text], Padding), BgText .. string.rep(BgCode, Padding))
+			T.blit(Text .. string.rep(" ", Padding), Built.Fg:sub(From + 1, To) .. string.rep(Hex[P.Text], Padding), Built.Bg:sub(From + 1, To) .. string.rep(BgCode, Padding))
+			if (Built.Starts and Built.Starts[Part + 2]) then
+				Part = Part + 1
+			else
+				LineIndex, Part, Built = LineIndex + 1, 0, nil
+			end
 		end
 	end
 end
 
 local function EditorCursor(Self)
+	local Th = BlockOS.Require("theme").Get()
+	if (Prefs.WordWrap) then
+		local Offset = CursorOffset(Self.H)
+		local _, Inset = CursorRow()
+		if (Offset < 0 or Offset >= Self.H or Inset >= Self.W - Self.Gutter) then return nil end
+		return Self.X + Self.Gutter + Inset, Self.Y + Offset, Palette(Th).Text
+	end
 	local Row = Doc.Y - Doc.ScrollY
 	if (Row < 1 or Row > Self.H) then return nil end
 	local Column = DisplayWidth(Doc.Lines[Doc.Y], Doc.X - 1) - Doc.ScrollX
 	if (Column < 0 or Column >= Self.W - Self.Gutter) then return nil end
-	local Th = BlockOS.Require("theme").Get()
 	return Self.X + Self.Gutter + Column, Self.Y + Row - 1, Palette(Th).Text
 end
 
 local function PositionFromMouse(Self, X, Y)
+	if (Prefs.WordWrap) then
+		local Top = math.max(1, math.min(#Doc.Lines, Doc.ScrollY + 1))
+		local WrappedLine, Row = StepRows(Top, Doc.ScrollRow, math.max(0, Y - Self.Y))
+		local Starts = LineStarts(WrappedLine)
+		Row = math.min(Row, #Starts - 1)
+		local Inset = Starts[Row + 1] + math.max(0, X - Self.X - Self.Gutter)
+		if (Starts[Row + 2]) then Inset = math.min(Inset, Starts[Row + 2] - 1) end
+		return CharFromDisplay(Doc.Lines[WrappedLine], Inset), WrappedLine
+	end
 	local LineIndex = math.max(1, math.min(#Doc.Lines, Doc.ScrollY + Y - Self.Y + 1))
 	local Column = math.max(0, X - Self.X - Self.Gutter + Doc.ScrollX)
 	return CharFromDisplay(Doc.Lines[LineIndex], Column), LineIndex
@@ -719,6 +862,11 @@ local function EditorEvent(Self, Name, A, B, C)
 		end
 		return true
 	elseif (Name == "mouse_scroll") then
+		if (Prefs.WordWrap) then
+			local Top, Row = StepRows(math.max(1, math.min(#Doc.Lines, Doc.ScrollY + 1)), Doc.ScrollRow, A * 3)
+			Doc.ScrollY, Doc.ScrollRow = Top - 1, Row
+			return true
+		end
 		Doc.ScrollY = math.max(0, math.min(Doc.ScrollY + A * 3, math.max(0, #Doc.Lines - Self.H)))
 		return true
 	elseif (Name == "char") then
@@ -842,7 +990,10 @@ function Page:OnLayout(W, H)
 	self:Add(Ui.Panel.new({ X = 1, Y = 1, W = W, H = 1, Bg = "Panel" }))
 	self:Add(Ui.Button.new({ X = 1, Y = 1, Text = "File", Bg = "Panel", OnClick = function() FileMenu() end }))
 	self:Add(Ui.Button.new({ X = 7, Y = 1, Text = "Edit", Bg = "Panel", OnClick = function() EditMenu() end }))
-	self:Add(Ui.Button.new({ X = W - 13, Y = 1, W = 6, Text = "Save", Bg = "Panel", OnClick = function() Save() end }))
+	self:Add(Ui.Button.new({ X = 13, Y = 1, Text = "View", Bg = "Panel", OnClick = function() ViewMenu() end }))
+	if (W >= 33) then
+		self:Add(Ui.Button.new({ X = W - 13, Y = 1, W = 6, Text = "Save", Bg = "Panel", OnClick = function() Save() end }))
+	end
 	self:Add(Ui.Button.new({ X = W - 6, Y = 1, W = 7, Text = "Run \16", Style = "primary", OnClick = function() Run() end }))
 	Editor = self:Add(Ui.Canvas.new({
 		X = 1, Y = 2, W = W, H = H - 2, Gutter = 3, Focusable = true, KeepFocus = true,
@@ -854,7 +1005,7 @@ function Page:OnLayout(W, H)
 		X = 1, Y = H, W = W, H = 1,
 		OnDraw = function(Self, T, Th)
 			local Left = " Ln " .. Doc.Y .. ", Col " .. Doc.X .. (Doc.Modified and "  \7 Edited" or "")
-			local Right = (IsLua() and "Lua" or "Text") .. " "
+			local Right = (Prefs.WordWrap and "Wrap  " or "") .. (IsLua() and "Lua" or "Text") .. " "
 			if (Message and os.clock() - MessageTime < 4) then
 				Right = Message .. "  " .. Right
 			end
