@@ -99,10 +99,10 @@ bar. Turn animations off in **Settings → Dock** if your server is slow.
 | **Finder** | File manager with a sidebar (favourites, Applications, disks), list view, context menus, copy/cut/paste, rename, Get Info and Open in Terminal. Right-click any file, folder or app and choose **Add to Desktop** for a desktop shortcut. |
 | **Savannah** | Web browser for [ccinternet](https://github.com/tamayaren/ccinternet), the in-game internet. Tabs, favourites, history, find on page (Ctrl+F), view source, forms with file uploads and Save Page As. Opens local `.ccmd` sites from Finder as `local://` addresses to preview them before uploading. See [Savannah](#savannah). |
 | **Terminal** | A CraftOS shell in a window. Includes `bpm` (package manager) and `open`. |
-| **Editor** | Code editor with Lua syntax highlighting, selection, undo/redo, find/replace, go to line, and Run (F5). **File > Add to Desktop** puts the open script on the desktop. |
+| **Editor** | Code editor with Lua syntax highlighting, selection, undo/redo, find/replace, go to line, optional word wrap (**View > Word Wrap**), and Run (F5). **File > Add to Desktop** puts the open script on the desktop. |
 | **App Store** | Browse catalogs, install apps from Pastebin or any URL, and manage installed apps. |
 | **Messages** | Encrypted chat rooms and direct messages between BlockOS computers over rednet (needs a modem). |
-| **Notes** | Quick notes with word wrap, bullet lists and autosave, stored in `/home/Notes`. Opens `.txt` files from Finder. |
+| **Notes** | Quick notes with word wrap (switch it off with the **Wrap** button or a right-click), bullet lists and autosave, stored in `/home/Notes`. Opens `.txt` files from Finder. |
 | **Brocreate** | Paint pictures with solid colours and text characters: pen, line, box (outline or filled), fill, text, colour picker and eraser, with undo/redo. Left and right click paint with two colours; switch the ink between **Solid** and **Char** (any of the 256 characters). Saves `.bimg` (or colour-only `.nfp`) to `/home/Pictures`. Use **File > Set as Wallpaper**, or right-click a picture in Finder and choose **Set as Wallpaper**. |
 | **Print** | Print text files on an attached printer, with a page preview, page titles, copies, and ink and paper levels. Right-click a `.txt` file in Finder and choose **Print**, or use Print in Notes. |
 | **Network** | Finds nearby BlockOS computers over a wireless or ender modem and, with a GPS cluster in range, shows them on a map with distance and direction. Turn off *Let other computers find this one* (also in **Settings → Network**) to stay hidden. |
@@ -153,7 +153,7 @@ same API, go to **bTunes → Add → Server**.
 **CCDream** (App Store, *Developer*) makes websites for the ccinternet. It opens a site folder
 (new sites go in `/home/Sites`) with a file browser on the left, the page's `.ccmd` source with
 syntax highlighting in the middle and a live preview of it on the right; switch between
-**Code**, **Split** and **Preview** in the toolbar (Ctrl+P) and hide the files with Ctrl+B.
+**Code**, **Split** and **Preview** in the toolbar (Ctrl+P) and hide the files with Ctrl+B. **View > Word Wrap** wraps long lines.
 
 * The preview updates as you type and shows the site's pictures. Click a link in it to open
   that page's file, or press **Open** (F5) to view the page in Savannah.

@@ -1,4 +1,4 @@
--- Notes: a notepad with a list of notes, word wrap and autosave. Also opens .txt files.
+-- Notes: a notepad with a list of notes, optional word wrap and autosave. Also opens .txt files.
 
 local Ui = BlockOS.Require("ui")
 local Gfx = BlockOS.Require("gfx")
@@ -14,7 +14,13 @@ local Notes = {}
 local Doc = nil
 local Rows = {}
 local Layout = { SideW = 0, EX = 1, EY = 2, EW = 10, EH = 5 }
+local Prefs = Config.Load("notes")
 local Build
+
+-- Word wrap is on unless it has been switched off.
+local function WrapOn()
+	return Prefs.WordWrap ~= false
+end
 
 local function SplitLines(Text)
 	local Lines = {}
@@ -78,7 +84,7 @@ end
 
 local function Open(Path)
 	Save()
-	Doc = { Path = Path, Lines = SplitLines(Config.ReadText(Path)), X = 1, Y = 1, Scroll = 0, GoalX = nil, Dirty = false }
+	Doc = { Path = Path, Lines = SplitLines(Config.ReadText(Path)), X = 1, Y = 1, Scroll = 0, ScrollX = 0, GoalX = nil, Dirty = false }
 	BlockOS.SetTitle(fs.getName(Path))
 end
 
@@ -115,7 +121,8 @@ local function Rewrap()
 	Rows = {}
 	local Width = math.max(4, Layout.EW)
 	for Index, Line in ipairs(Doc.Lines) do
-		local Starts = Segments(Line, Width)
+		-- Without word wrap every line is one row, scrolled sideways by Doc.ScrollX.
+		local Starts = WrapOn() and Segments(Line, Width) or { 1 }
 		for Part, Start in ipairs(Starts) do
 			local Stop = Starts[Part + 1] and (Starts[Part + 1] - 1) or (#Line + 1)
 			table.insert(Rows, { Line = Index, Start = Start, Stop = Stop, Last = Starts[Part + 1] == nil })
@@ -140,6 +147,13 @@ local function EnsureVisible()
 		Doc.Scroll = Index - Layout.EH
 	end
 	Doc.Scroll = math.max(0, math.min(Doc.Scroll, math.max(0, #Rows - 1)))
+	if (WrapOn()) then
+		Doc.ScrollX = 0
+	elseif (Doc.X - 1 < Doc.ScrollX) then
+		Doc.ScrollX = math.max(0, Doc.X - 5)
+	elseif (Doc.X > Doc.ScrollX + Layout.EW) then
+		Doc.ScrollX = Doc.X - Layout.EW
+	end
 end
 
 local function Changed()
@@ -291,6 +305,12 @@ local function DeleteCurrent()
 	Build()
 end
 
+local function ToggleWrap()
+	Prefs.WordWrap = not WrapOn()
+	Config.Save("notes")
+	Build()
+end
+
 local Editor
 
 function Build()
@@ -321,6 +341,9 @@ function Build()
 			Save()
 			if (Doc.Path) then BlockOS.Launch("print", { Doc.Path }) end
 		end }))
+	end
+	if (W >= 36) then
+		Page:Add(Ui.Button.new({ X = 26, Y = 1, Text = WrapOn() and " Wrap \7 " or " Wrap ", Style = "plain", Bg = "Panel", OnClick = ToggleWrap }))
 	end
 	if (Layout.SideW == 0) then
 		Page:Add(Ui.Button.new({ X = W - 7, Y = 1, W = 7, Text = "Notes \31", Style = "plain", Bg = "Panel", OnClick = function()
@@ -360,6 +383,7 @@ function Build()
 				local Fg = Th.Text
 				if (Row) then
 					Text = Doc.Lines[Row.Line]:sub(Row.Start, Row.Last and #Doc.Lines[Row.Line] or Row.Stop)
+					Text = Text:sub(Doc.ScrollX + 1, Doc.ScrollX + Self.W)
 					if (Row.Line == 1) then Fg = Th.Accent end
 				end
 				Gfx.Write(T, Self.X, Self.Y + Offset - 1, Gfx.Pad(Text, Self.W), Fg, Th.WindowBg)
@@ -368,8 +392,9 @@ function Build()
 		OnCursor = function(Self, Th)
 			local Index, Row = CursorRow()
 			local Y = Index - Doc.Scroll
-			if (Y < 1 or Y > Self.H) then return nil end
-			return Self.X + Doc.X - Row.Start, Self.Y + Y - 1, Th.Text
+			local X = Doc.X - Row.Start - Doc.ScrollX
+			if (Y < 1 or Y > Self.H or X < 0 or X >= Self.W) then return nil end
+			return Self.X + X, Self.Y + Y - 1, Th.Text
 		end,
 		OnEvent = function(Self, Name, A, B, C)
 			if (Name == "char") then
@@ -380,11 +405,16 @@ function Build()
 				return true
 			elseif (Name == "key") then
 				return HandleKey(A)
+			elseif (Name == "mouse_click" and A == 2) then
+				local Choice = Ui.ContextMenu(B, C, { { Text = (WrapOn() and "\7 " or "  ") .. "Word Wrap" } })
+				if (Choice == 1) then ToggleWrap() end
+				return true
 			elseif (Name == "mouse_click" or Name == "mouse_drag") then
 				local Row = Rows[Doc.Scroll + C - Self.Y + 1] or Rows[#Rows]
 				Doc.Y = Row.Line
-				Doc.X = math.max(Row.Start, math.min(Row.Start + B - Self.X, Row.Stop))
+				Doc.X = math.max(Row.Start, math.min(Row.Start + B - Self.X + Doc.ScrollX, Row.Stop))
 				Doc.GoalX = nil
+				EnsureVisible()
 				return true
 			elseif (Name == "mouse_scroll") then
 				Doc.Scroll = math.max(0, math.min(Doc.Scroll + A * 2, math.max(0, #Rows - Self.H)))
