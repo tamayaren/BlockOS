@@ -3,7 +3,7 @@
 -- per app, so the BlockCloud client library is bundled here: on launch it is written to
 -- /blockos/lib/cloud (unless a newer copy is already there) and then the app runs.
 
-local Version = "1.1.0"
+local Version = "1.2.0"
 local Files = {}
 Files["blockos/apps/blockdrive/main.lua"] = [[
 -- BlockDrive: browse and manage files on BlockCloud servers in the Data Center.
@@ -12,6 +12,7 @@ Files["blockos/apps/blockdrive/main.lua"] = [[
 
 local Ui = BlockOS.Require("ui")
 local Gfx = BlockOS.Require("gfx")
+local Config = BlockOS.Require("config")
 local Client = BlockOS.Require("cloud/client")
 local Drive = BlockOS.Require("cloud/drive")
 local Path = BlockOS.Require("cloud/path")
@@ -47,6 +48,7 @@ local View = {}
 
 Act.ManifestUrl = "https://raw.githubusercontent.com/tamayaren/BlockOS/server/blockdrive-manifest.cfg"
 Act.EditLimit = 64 * 1024
+Act.Prefs = Config.Load("blockdrive")
 
 local function Say(Text)
 	S.Status, S.Error = Text, nil
@@ -365,12 +367,60 @@ function Act.CloseEditor()
 	Act.Load()
 end
 
+-- Visual rows of the open file: { Line, Start, Stop }. Without word wrap every line is one row.
+function Act.EditRows(Editor)
+	local Wrap = Act.Prefs.WordWrap == true
+	local Width = math.max(2, Editor.ViewW or 2)
+	if (Editor.Rows and Editor.RowsWidth == Width and Editor.RowsWrap == Wrap) then return Editor.Rows end
+	local Rows = {}
+	for Index, Line in ipairs(Editor.Lines) do
+		local Position = 1
+		-- Break after the last space that fits, or mid-word when there is none.
+		while (Wrap and #Line - Position + 1 >= Width) do
+			local Break = Line:sub(Position, Position + Width - 1):match("^.*%S[ \t]*()[ \t]")
+			local Next = Position + (Break or Width)
+			Rows[#Rows + 1] = { Line = Index, Start = Position, Stop = Next - 1 }
+			Position = Next
+		end
+		Rows[#Rows + 1] = { Line = Index, Start = Position, Stop = #Line + 1 }
+	end
+	Editor.Rows, Editor.RowsWidth, Editor.RowsWrap = Rows, Width, Wrap
+	return Rows
+end
+
+-- The index of the row holding the cursor, and the row.
+function Act.CursorRow(Editor)
+	local Rows = Act.EditRows(Editor)
+	for Index, Row in ipairs(Rows) do
+		if (Row.Line == Editor.Y and Editor.X >= Row.Start and Editor.X <= Row.Stop) then return Index, Row end
+	end
+	return #Rows, Rows[#Rows]
+end
+
+-- Moves the cursor by Step visual rows, keeping its place within the row.
+function Act.MoveRows(Editor, Step)
+	local Rows = Act.EditRows(Editor)
+	local Index, Row = Act.CursorRow(Editor)
+	local Target = Rows[math.max(1, math.min(#Rows, Index + Step))]
+	Editor.Y = Target.Line
+	Editor.X = math.min(Target.Start + Editor.X - Row.Start, Target.Stop)
+end
+
+function Act.ToggleWrap()
+	Act.Prefs.WordWrap = not Act.Prefs.WordWrap
+	Config.Save("blockdrive")
+	if (S.Editor) then S.Editor.Left = 0 end
+	Say(Act.Prefs.WordWrap and "Word wrap on" or "Word wrap off")
+	Build()
+end
+
 function Act.EditKey(Editor, Name, A)
 	local Lines = Editor.Lines
 	local Line = Lines[Editor.Y]
 	local function Edited()
 		if (not Editor.Modified) then BlockOS.SetCloseHandler(true) end
 		Editor.Modified = true
+		Editor.Rows = nil
 	end
 	if (Name == "char" or Name == "paste") then
 		if (Editor.ReadOnly) then return true end
@@ -387,18 +437,13 @@ function Act.EditKey(Editor, Name, A)
 		if (Editor.X > 1) then Editor.X = Editor.X - 1 elseif (Editor.Y > 1) then Editor.Y = Editor.Y - 1 Editor.X = #Lines[Editor.Y] + 1 end
 	elseif (A == keys.right) then
 		if (Editor.X <= #Line) then Editor.X = Editor.X + 1 elseif (Editor.Y < #Lines) then Editor.Y = Editor.Y + 1 Editor.X = 1 end
-	elseif (A == keys.up and Editor.Y > 1) then
-		Editor.Y = Editor.Y - 1
-	elseif (A == keys.down and Editor.Y < #Lines) then
-		Editor.Y = Editor.Y + 1
-	elseif (A == keys.home) then
-		Editor.X = 1
-	elseif (A == keys["end"]) then
-		Editor.X = #Line + 1
-	elseif (A == keys.pageUp) then
-		Editor.Y = math.max(1, Editor.Y - 10)
-	elseif (A == keys.pageDown) then
-		Editor.Y = math.min(#Lines, Editor.Y + 10)
+	elseif (A == keys.up or A == keys.down) then
+		Act.MoveRows(Editor, (A == keys.up) and -1 or 1)
+	elseif (A == keys.home or A == keys["end"]) then
+		local _, Row = Act.CursorRow(Editor)
+		Editor.X = (A == keys.home) and Row.Start or Row.Stop
+	elseif (A == keys.pageUp or A == keys.pageDown) then
+		Act.MoveRows(Editor, (A == keys.pageUp) and -10 or 10)
 	elseif (Editor.ReadOnly) then
 		return false
 	elseif (A == keys.enter or A == keys.numPadEnter) then
@@ -440,34 +485,44 @@ function View.Editor(X, Y, W, H)
 	local Editor = S.Editor
 	Page:Add(Ui.Panel.new({ X = 1, Y = 1, W = Page.W, H = 1, Bg = "Panel" }))
 	Page:Add(Ui.Button.new({ X = 1, Y = 1, Text = " \17 Files ", Bg = "Panel", OnClick = Act.CloseEditor }))
-	Page:Add(Ui.Label.new({ X = 11, Y = 1, W = Page.W - 19, Bg = "Panel", Fg = "PanelFg",
+	Page:Add(Ui.Label.new({ X = 11, Y = 1, W = Page.W - 26, Bg = "Panel", Fg = "PanelFg",
 		Text = function() return Path.Name(Editor.Remote) .. (Editor.Modified and " *" or "") .. (Editor.ReadOnly and " (read only)" or "") end }))
+	Page:Add(Ui.Button.new({ X = Page.W - 13, Y = 1, W = 6, Text = "Wrap", Style = Act.Prefs.WordWrap and "primary" or "default", OnClick = Act.ToggleWrap }))
 	Page:Add(Ui.Button.new({ X = Page.W - 6, Y = 1, W = 6, Text = "Save", Style = "primary", Enabled = not Editor.ReadOnly, OnClick = function() Act.Save() end }))
+	Editor.ViewW = Page.W
 	local Canvas = Page:Add(Ui.Canvas.new({
 		X = 1, Y = 2, W = Page.W, H = Page.H - 2, Focusable = true,
 		OnDraw = function(Self, T, Th)
-			if (Editor.Y <= Editor.Top) then Editor.Top = Editor.Y - 1 end
-			if (Editor.Y > Editor.Top + Self.H) then Editor.Top = Editor.Y - Self.H end
-			if (Editor.X <= Editor.Left) then Editor.Left = Editor.X - 1 end
-			if (Editor.X > Editor.Left + Self.W) then Editor.Left = Editor.X - Self.W end
-			for Row = 1, Self.H do
-				local Line = Editor.Lines[Editor.Top + Row]
-				local Text = Line and Line:gsub("\t", " "):sub(Editor.Left + 1, Editor.Left + Self.W) or ""
-				Gfx.Write(T, Self.X, Self.Y + Row - 1, Gfx.Pad(Text, Self.W), Line and Th.Text or Th.SubText, Th.WindowBg)
+			local Rows = Act.EditRows(Editor)
+			local Index, Row = Act.CursorRow(Editor)
+			local Column = Editor.X - Row.Start
+			if (Index <= Editor.Top) then Editor.Top = Index - 1 end
+			if (Index > Editor.Top + Self.H) then Editor.Top = Index - Self.H end
+			if (Column < Editor.Left) then Editor.Left = Column end
+			if (Column >= Editor.Left + Self.W) then Editor.Left = Column - Self.W + 1 end
+			for Offset = 1, Self.H do
+				local Shown = Rows[Editor.Top + Offset]
+				local Text = Shown and Editor.Lines[Shown.Line]:sub(Shown.Start, Shown.Stop):gsub("\t", " "):sub(Editor.Left + 1, Editor.Left + Self.W) or ""
+				Gfx.Write(T, Self.X, Self.Y + Offset - 1, Gfx.Pad(Text, Self.W), Shown and Th.Text or Th.SubText, Th.WindowBg)
 			end
 		end,
 		OnCursor = function(Self, Th)
-			return Self.X + Editor.X - Editor.Left - 1, Self.Y + Editor.Y - Editor.Top - 1, Th.Text
+			local Index, Row = Act.CursorRow(Editor)
+			return Self.X + Editor.X - Row.Start - Editor.Left, Self.Y + Index - Editor.Top - 1, Th.Text
 		end,
 		OnEvent = function(Self, Name, A, B, C)
 			if (Name == "mouse_click") then
-				Editor.Y = math.max(1, math.min(#Editor.Lines, C - Self.Y + 1 + Editor.Top))
-				Editor.X = math.max(1, math.min(#Editor.Lines[Editor.Y] + 1, B - Self.X + 1 + Editor.Left))
+				local Rows = Act.EditRows(Editor)
+				local Row = Rows[math.max(1, math.min(#Rows, C - Self.Y + 1 + Editor.Top))]
+				Editor.Y = Row.Line
+				Editor.X = math.max(Row.Start, math.min(Row.Stop, Row.Start + B - Self.X + Editor.Left))
 				return true
 			elseif (Name == "mouse_scroll") then
-				Editor.Top = math.max(0, math.min(#Editor.Lines - 1, Editor.Top + A))
-				Editor.Y = math.max(Editor.Top + 1, math.min(Editor.Y, Editor.Top + Self.H))
-				Editor.X = math.min(Editor.X, #Editor.Lines[Editor.Y] + 1)
+				local Rows = Act.EditRows(Editor)
+				local Index = Act.CursorRow(Editor)
+				Editor.Top = math.max(0, math.min(#Rows - 1, Editor.Top + A))
+				-- The cursor follows the view, as drawing always keeps it on screen.
+				Act.MoveRows(Editor, math.max(Editor.Top + 1, math.min(Index, Editor.Top + Self.H)) - Index)
 				return true
 			end
 			return Act.EditKey(Editor, Name, A)
