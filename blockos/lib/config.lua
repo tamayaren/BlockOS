@@ -23,6 +23,7 @@ Config.Defaults = {
 		ShowSeconds = false,
 		AutoUpdate = true,
 		AutoInstall = false,
+		Compression = true,
 		UpdateURL = Config.Repo,
 		Notifications = true,
 		NotificationSound = true,

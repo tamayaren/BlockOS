@@ -16,6 +16,8 @@ local function Usage()
 	print("  bpm url <url> [name]      install from a URL")
 	print("  bpm remove <id>           uninstall an app")
 	print("  bpm update                update BlockOS")
+	print("  bpm compress              pack system files and apps")
+	print("  bpm expand                unpack them again")
 end
 
 local function Catalog()
@@ -120,6 +122,23 @@ elseif (Command == "update") then
 	else
 		printError(ApplyErr)
 	end
+elseif (Command == "compress" or Command == "expand") then
+	local Compress = BlockOS.Require("compress")
+	local Settings = Config.Settings()
+	Settings.Compression = (Command == "compress")
+	Settings.Compacted = Settings.Compression and Config.Version() or nil
+	Compress.Enabled = Settings.Compression
+	Config.Save("settings")
+	local Changed, Saved = (Settings.Compression and Compress.Compact or Compress.Expand)(function(Done, Total)
+		local _, Y = term.getCursorPos()
+		term.setCursorPos(1, Y)
+		term.clearLine()
+		write(Done .. "/" .. Total)
+	end)
+	print()
+	local Stored, Original = Compress.Usage()
+	print((Settings.Compression and "Packed " or "Unpacked ") .. Changed .. " files, " .. math.abs(Saved) .. " bytes " .. (Settings.Compression and "freed." or "used."))
+	print("System and apps: " .. Stored .. " bytes on disk, " .. Original .. " unpacked.")
 else
 	Usage()
 end

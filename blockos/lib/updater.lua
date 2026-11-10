@@ -1,6 +1,7 @@
 -- Checks the update channel for a newer manifest and installs it in place.
 
 local Config = BlockOS.Require("config")
+local Compress = BlockOS.Require("compress")
 
 local Updater = {}
 
@@ -67,6 +68,7 @@ function Updater.Check()
 end
 
 -- Downloads every file in the manifest to a staging folder, then swaps them in.
+-- Files are packed as they arrive, so staging needs a fraction of the space of the plain download.
 function Updater.Apply(Manifest, OnProgress)
 	local Staging = "/blockos/.update"
 	if (fs.exists(Staging)) then fs.delete(Staging) end
@@ -83,7 +85,14 @@ function Updater.Apply(Manifest, OnProgress)
 				fs.delete(Staging)
 				return false, Updater.State.Error
 			end
-			Config.WriteText(fs.combine(Staging, Path), Body)
+			if (not Compress.Write(fs.combine(Staging, Path), Body, Path)) then
+				Updater.State.Status = "error"
+				Updater.State.Error = Path .. ": Out of space"
+				fs.delete(Staging)
+				return false, Updater.State.Error
+			end
+			-- Packing takes long enough that a run of large files has to yield.
+			if (Index % 4 == 0) then sleep(0) end
 		end
 	end
 	for _, Path in ipairs(Manifest.Files) do

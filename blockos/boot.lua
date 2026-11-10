@@ -110,10 +110,38 @@ local function Migrate(Config)
 	end
 end
 
+-- Packs system files and apps that are still stored as plain text, once per installed version.
+local function Optimize(Compress)
+	local W, H = term.getSize()
+	term.setBackgroundColor(colors.black)
+	term.setTextColor(colors.white)
+	term.clear()
+	local Title = "Optimizing storage..."
+	term.setCursorPos(math.floor((W - #Title) / 2) + 1, math.floor(H / 2))
+	term.write(Title)
+	term.setTextColor(colors.lightGray)
+	Compress.Compact(function(Done, Total)
+		local Text = math.floor(Done / math.max(Total, 1) * 100) .. "%"
+		term.setCursorPos(math.floor((W - #Text) / 2) + 1, math.floor(H / 2) + 2)
+		term.clearLine()
+		term.write(Text)
+	end)
+end
+
 local Ok, Err = pcall(function()
+	-- Packed files have to be readable before anything else is loaded.
+	local Compress = BlockOS.Require("compress")
+	Compress.Hook()
 	local Config = BlockOS.Require("config")
 	BlockOS.Version = Config.Version()
 	Migrate(Config)
+	local Settings = Config.Settings()
+	Compress.Enabled = Settings.Compression
+	if (Settings.Compression and Settings.Compacted ~= BlockOS.Version) then
+		Optimize(Compress)
+		Settings.Compacted = BlockOS.Version
+		Config.Save("settings")
+	end
 	math.randomseed(os.epoch("utc") + os.getComputerID())
 
 	local Users = BlockOS.Require("users")

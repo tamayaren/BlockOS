@@ -2,6 +2,7 @@
 -- Each app folder holds an app.cfg (serialised Lua table) and its entry script.
 
 local Config = BlockOS.Require("config")
+local Compress = BlockOS.Require("compress")
 
 local Apps = {}
 
@@ -117,7 +118,7 @@ function Apps.Install(Meta, Source)
 	end
 	Stored.Main = "main.lua"
 	Stored.Installed = os.epoch and os.epoch("utc") or 0
-	Config.WriteText(fs.combine(Dir, "main.lua"), Source)
+	Compress.Write(fs.combine(Dir, "main.lua"), Source)
 	Config.Write(fs.combine(Dir, "app.cfg"), Stored)
 	os.queueEvent("blockos_apps")
 	return Apps.Get(ID)

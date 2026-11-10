@@ -229,6 +229,24 @@ appears in the menu bar; open it, or go to **Settings → Software Update**. You
 can also turn on background installs. Updates never touch `/blockos/data`
 (settings, users, messages) or `/blockos/userapps`.
 
+### Compression
+
+BlockOS keeps its own files and installed apps compressed on the computer's drive, so the
+system takes about 210 KB instead of 600 KB and an App Store app about a third of its size.
+The files in this repository stay plain Lua: each one is packed (DEFLATE, lossless) as the
+installer, an update or the App Store writes it to the drive. On a computer updating from
+1.7.0 or older, the first boot shows *Optimizing storage...* once while it packs what is
+already there.
+
+Packed files open as normal. Anything that reads one, including the shell, `edit` and the
+Editor, gets the original text; a file you edit is saved as plain text. `startup.lua`,
+`blockos/boot.lua`, `blockos/lib/compress.lua`, the turtle agent and everything in
+`/blockos/data` are never packed. Turn compression off or on with the **Zip** button in
+**Settings → Storage**, or with `bpm expand` and `bpm compress`.
+
+Packed files are only readable while BlockOS is running, recovery shell included. To read
+them from plain CraftOS, run `bpm expand` first.
+
 ### Recovery
 
 If BlockOS won't start or the screen is unusable, hold **Ctrl+T** while the
@@ -243,6 +261,7 @@ startup.lua            boots BlockOS
 blockos/boot.lua       global BlockOS API, panic screen
 blockos/sys/           desktop (window manager), login, setup wizard, app runner
 blockos/lib/           ui toolkit, graphics, themes, config, users, apps, updater, chat, sha256, tasks, ...
+blockos/lib/compress.lua  DEFLATE packer and the fs.open hook that reads packed files
 blockos/lib/ccinternet/ ccmd parser, layout, images and protocol from ccinternet, plus local sites
 blockos/apps/<id>/     bundled apps (app.cfg + main.lua)
 blockos/turtle/        turtle agent

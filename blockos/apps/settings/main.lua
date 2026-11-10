@@ -10,6 +10,7 @@ local Wallpaper = BlockOS.Require("wallpaper")
 local Updater = BlockOS.Require("updater")
 local Screensaver = BlockOS.Require("screensaver")
 local Wifi = BlockOS.Require("wifi")
+local Compress = BlockOS.Require("compress")
 
 local Args = { ... }
 
@@ -320,6 +321,35 @@ function Builders.storage(X, Y, W, H)
 		end
 	end
 	Page:Add(Ui.Button.new({ X = X + 10, Y = ButtonY, Text = " Uninstall ", Style = "danger", OnClick = Uninstall }))
+	-- Packing or unpacking every system file and app takes a few seconds, so it asks first.
+	local function ToggleCompression()
+		local Stored, Original = Compress.Usage()
+		local Message
+		if (Settings.Compression) then
+			Message = "Compression is on. BlockOS and your apps take " .. Gfx.FormatSize(Stored) .. " instead of " .. Gfx.FormatSize(Original) .. ". Turn it off and unpack them?"
+			if (Original - Stored > fs.getFreeSpace("/") - 4096) then
+				Ui.Alert("Compression", "There is not enough free space to unpack BlockOS and your apps.")
+				return
+			end
+		else
+			Message = "Pack BlockOS and your apps to free up space? They take " .. Gfx.FormatSize(Stored) .. " now and still open as normal."
+		end
+		if (not Ui.Confirm("Compression", Message, Settings.Compression and "Turn Off" or "Turn On")) then return end
+		Settings.Compression = not Settings.Compression
+		Compress.Enabled = Settings.Compression
+		Settings.Compacted = Settings.Compression and Config.Version() or nil
+		Save()
+		local _, Saved = (Settings.Compression and Compress.Compact or Compress.Expand)()
+		BlockOS.Notify("Settings", Settings.Compression and ("Compression freed " .. Gfx.FormatSize(math.max(Saved, 0)) .. ".") or "Compression is off.", { Sound = false })
+		Usage = nil
+		Build()
+	end
+	local Wide = W >= 34
+	Page:Add(Ui.Button.new({
+		X = X + 22, Y = ButtonY,
+		Text = Wide and (Settings.Compression and " Compressed " or " Compress ") or (Settings.Compression and "\7Zip " or " Zip "),
+		OnClick = ToggleCompression
+	}))
 	List.OnContext = function(_, Index, _, MX, MY)
 		if (Index and Ui.ContextMenu(MX, MY, { "Uninstall" }) == 1) then Uninstall() end
 	end

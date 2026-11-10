@@ -40,13 +40,26 @@ local function BackupStartup()
 	end
 end
 
+-- Whether this computer keeps its system files packed: on, unless it was turned off in Settings.
+local function WantsCompression()
+	local Path = "/blockos/data/settings.dat"
+	if (not fs.exists(Path)) then return true end
+	local Handle = fs.open(Path, "r")
+	local Saved = textutils.unserialise(Handle.readAll() or "")
+	Handle.close()
+	return not (type(Saved) == "table" and Saved.Compression == false)
+end
+
 local function InstallFiles(Progress)
 	BackupStartup()
+	-- The bundle holds plain source; each file is packed as it is written to the drive.
+	local Compress = BlockOS.Require("compress")
+	Compress.Enabled = WantsCompression()
 	local List = SortedPaths()
 	for Index, Path in ipairs(List) do
 		if (Progress) then Progress(Index - 1, #List, Path) end
-		WriteFile(Path, Files[Path])
-		if (Index % 6 == 0) then sleep(0) end
+		if (not Compress.Write(Path, Files[Path])) then error("Cannot write " .. Path, 0) end
+		if (Index % 2 == 0) then sleep(0) end
 	end
 	if (Progress) then Progress(#List, #List, "Done") end
 end
